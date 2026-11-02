@@ -1348,9 +1348,24 @@ pub fn edit_profile(app: &Rc<RefCell<App>>) {
     let name = labeled_text(&panel, &sizer, "Display &Name:", profile.get("display_name").and_then(Value::as_str).unwrap_or(""));
     let note = if modern { profile.get("note").and_then(Value::as_str).unwrap_or("") } else { profile.pointer("/source/note").and_then(Value::as_str).unwrap_or("") };
     let bio = labeled_area(&panel, &sizer, "&Bio:", note);
-    let fields = profile.get("fields").and_then(Value::as_array).cloned().unwrap_or_default();
+    let fields = profile
+        .get("fields")
+        .and_then(Value::as_array)
+        .cloned()
+        .filter(|items| !items.is_empty())
+        .or_else(|| app.borrow().me.pointer("/source/fields").and_then(Value::as_array).cloned())
+        .or_else(|| app.borrow().me.get("fields").and_then(Value::as_array).cloned())
+        .unwrap_or_default();
+    let max_fields = api
+        .instance_v2()
+        .ok()
+        .and_then(|instance| instance.pointer("/configuration/accounts/max_profile_fields").cloned())
+        .and_then(|value| value.as_i64().or_else(|| value.as_str().and_then(|text| text.parse().ok())))
+        .filter(|count| *count > 0)
+        .map(|count| count as usize)
+        .unwrap_or_else(|| fields.len().max(4));
     let mut field_inputs = Vec::new();
-    for index in 0..4 {
+    for index in 0..max_fields {
         let row = BoxSizer::builder(Orientation::Horizontal).build();
         let label = StaticText::builder(&panel).with_label(&format!("Label {}:", index + 1)).build();
         let field_name = TextCtrl::builder(&panel).with_value(fields.get(index).and_then(|field| field.get("name")).and_then(Value::as_str).unwrap_or("")).with_size(Size::new(150, -1)).build();
