@@ -90,8 +90,8 @@ pub const CLEAR_NOTIFICATIONS: i32 = 10047;
 pub const ACCEPT: i32 = 10048;
 pub const REJECT: i32 = 10049;
 
-const PRIVACY_LABELS: &[&str] = &["Public", "Unlisted", "Followers-only", "Direct"];
-const PRIVACY_VALUES: &[&str] = &["public", "unlisted", "private", "direct"];
+pub(crate) const PRIVACY_LABELS: &[&str] = &["Public", "Unlisted", "Followers-only", "Direct"];
+pub(crate) const PRIVACY_VALUES: &[&str] = &["public", "unlisted", "private", "direct"];
 const LANGUAGES: &[(&str, &str)] = &[
     ("Default", ""),
     ("English", "en"),

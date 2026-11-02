@@ -1700,16 +1700,10 @@ fn post_details_for(app: &Rc<RefCell<App>>, parent: &impl WxWidget, status: Valu
     let api = app.borrow().api.clone();
     let status_id = id_of(&source);
     let app_reply = app.clone();
-    let author = account.get("acct").and_then(Value::as_str).unwrap_or("").to_string();
-    let visibility = source.get("visibility").and_then(Value::as_str).unwrap_or("public").to_string();
+    let source_reply = source.clone();
     reply.on_click(move |_| {
         let me = app_reply.borrow().me.get("acct").and_then(Value::as_str).unwrap_or("").to_string();
-        let initial = if author.is_empty() || author == me { String::new() } else { format!("@{author} ") };
-        if let Some(body) = prompt(&dialog, "Reply:", "Reply to Post") {
-            let text = if body.starts_with('@') { body } else { format!("{initial}{body}") };
-            let _ = api.status_post(vec![("status".to_string(), text), ("in_reply_to_id".to_string(), status_id.clone()), ("visibility".to_string(), visibility.clone())]);
-            sounds::play("replysnd");
-        }
+        reply_dialog(&dialog, &api, &status_id, &reply_mentions(&source_reply, &me), source_reply.get("visibility").and_then(Value::as_str).unwrap_or("public"));
     });
     if let Some((edit, pin, delete)) = own_buttons {
         let source_edit = source.clone();
@@ -1860,6 +1854,99 @@ fn poll_results(poll: &Value) -> String {
         }
     }
     text
+}
+
+fn reply_mentions(status: &Value, me: &str) -> String {
+    let mut users = String::new();
+    for word in status_plain_text(status).split_whitespace() {
+        if word.starts_with('@') && word != format!("@{me}") {
+            users.push_str(word);
+            users.push(' ');
+        }
+    }
+    let author = status.get("account").and_then(|account| account.get("acct")).and_then(Value::as_str).unwrap_or("");
+    if !author.is_empty() && author != me {
+        format!("@{author} {users}")
+    } else {
+        users
+    }
+}
+
+fn reply_dialog(parent: &impl WxWidget, api: &crate::api::Mastodon, status_id: &str, mentions: &str, visibility: &str) {
+    let (dialog, panel, sizer) = styled_dialog(parent, "Reply to Post", 500, 300);
+    let label = StaticText::builder(&panel).with_label("&Reply").build();
+    let initial = {
+        let trimmed = mentions.trim();
+        if trimmed.is_empty() { String::new() } else { format!("{trimmed} ") }
+    };
+    let text = TextCtrl::builder(&panel)
+        .with_value(&initial)
+        .with_style(TextCtrlStyle::MultiLine)
+        .with_size(Size::new(480, 100))
+        .build();
+    text.set_insertion_point_end();
+    let privacy_label = StaticText::builder(&panel).with_label("P&rivacy:").build();
+    let selected = app::PRIVACY_VALUES.iter().position(|item| *item == visibility).unwrap_or(0) as u32;
+    let privacy = Choice::builder(&panel)
+        .with_choices(app::PRIVACY_LABELS.iter().map(|item| (*item).to_string()).collect())
+        .with_selection(Some(selected))
+        .build();
+    let send = Button::builder(&panel).with_label("&Post").build();
+    let cancel = Button::builder(&panel).with_label("&Cancel").with_id(ID_CANCEL).build();
+    theme::paint(&label);
+    theme::paint(&privacy_label);
+    theme::paint(&text);
+    theme::paint(&privacy);
+    theme::paint(&send);
+    theme::paint(&cancel);
+    sizer.add(&label, 0, SizerFlag::Left | SizerFlag::Right | SizerFlag::Top, 10);
+    sizer.add(&text, 1, SizerFlag::Expand | SizerFlag::Left | SizerFlag::Right | SizerFlag::Bottom, 10);
+    sizer.add(&privacy_label, 0, SizerFlag::Left | SizerFlag::Right, 10);
+    sizer.add(&privacy, 0, SizerFlag::Expand | SizerFlag::Left | SizerFlag::Right | SizerFlag::Bottom, 10);
+    let buttons = BoxSizer::builder(Orientation::Horizontal).build();
+    buttons.add(&send, 0, SizerFlag::All, 5);
+    buttons.add(&cancel, 0, SizerFlag::All, 5);
+    sizer.add_sizer(&buttons, 0, SizerFlag::AlignRight | SizerFlag::Right | SizerFlag::Bottom, 10);
+    panel.set_sizer(sizer, true);
+
+    let api = api.clone();
+    let status_id = status_id.to_string();
+    let dialog_send = dialog;
+    let send_reply = Rc::new(move || {
+        let body = text.get_value().trim().to_string();
+        if body.is_empty() {
+            error_box(&dialog_send, "Reply cannot be empty.", "Error");
+            return;
+        }
+        let visibility = app::PRIVACY_VALUES
+            .get(privacy.get_selection().unwrap_or(0) as usize)
+            .copied()
+            .unwrap_or("public");
+        match api.status_post(vec![
+            ("status".to_string(), body),
+            ("in_reply_to_id".to_string(), status_id.clone()),
+            ("visibility".to_string(), visibility.to_string()),
+        ]) {
+            Ok(_) => {
+                sounds::play("replysnd");
+                dialog_send.end_modal(ID_OK);
+            }
+            Err(error) => error_box(&dialog_send, &format!("Error sending reply: {error}"), "Error"),
+        }
+    });
+    let send_click = send_reply.clone();
+    send.on_click(move |_| send_click());
+    dialog.on_char_hook(move |event| {
+        let post = matches!(&event, WindowEventData::Keyboard(key) if key.get_key_code() == Some(WXK_RETURN) && (key.control_down() || key.shift_down() || key.alt_down()));
+        if post {
+            send_reply();
+        } else {
+            event.skip(true);
+        }
+    });
+    text.set_focus();
+    dialog.show_modal();
+    dialog.destroy();
 }
 
 fn show_thread(parent: &impl WxWidget, api: &crate::api::Mastodon, status: &Value) {
