@@ -1243,9 +1243,11 @@ fn add_status(state: &mut App, status: Value) {
 fn add_notification(state: &mut App, notification: Value) {
     match notification.get("type").and_then(Value::as_str).unwrap_or("") {
         "favourite" | "reblog" | "follow" | "follow_request" | "status" | "added_to_collection" | "collection_update" => {
-            sounds::play("notificationsnd")
+            sounds::play("notificationsnd");
         }
-        "mention" => sounds::play("mentionsnd"),
+        "mention" => {
+            sounds::play("mentionsnd");
+        }
         _ => {}
     }
     let selected = selected_key(state);
@@ -2003,8 +2005,9 @@ fn direct_message(app: &Rc<RefCell<App>>) {
         }
         match api.status_post(vec![("status".to_string(), body), ("visibility".to_string(), "direct".to_string())]) {
             Ok(_) => {
-                sounds::play("send_dmsnd");
-                announcer.say("Direct message sent");
+                if !sounds::play("send_dmsnd") && !sounds::play("dmsnd") {
+                    announcer.say("Direct message sent");
+                }
                 dialog_send.end_modal(ID_OK);
             }
             Err(error) => error_box(&dialog_send, &format!("Error: {error}"), "Error"),

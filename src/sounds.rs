@@ -45,26 +45,27 @@ fn output() -> Option<std::sync::MutexGuard<'static, Option<MixerDeviceSink>>> {
     if guard.is_some() { Some(guard) } else { None }
 }
 
-pub fn play(name: &str) {
+pub fn play(name: &str) -> bool {
     let Some((_, file_name)) = FILES.iter().find(|(key, _)| *key == name) else {
-        return;
+        return false;
     };
     let Some(path) = crate::config::sound_file(&crate::config::sound_pack(), file_name) else {
-        return;
+        return false;
     };
     let Ok(file) = File::open(path) else {
-        return;
+        return false;
     };
     let Ok(decoder) = Decoder::new(BufReader::new(file)) else {
-        return;
+        return false;
     };
     let Some(guard) = output() else {
-        return;
+        return false;
     };
     let Some(sink) = guard.as_ref() else {
-        return;
+        return false;
     };
     let player = Player::connect_new(sink.mixer());
     player.append(decoder);
     player.detach();
+    true
 }
