@@ -1386,14 +1386,15 @@ pub fn edit_profile(app: &Rc<RefCell<App>>) {
     let header = labeled_text(&panel, &sizer, "Header Des&cription:", profile.get("header_description").and_then(Value::as_str).unwrap_or(""));
     let domains = profile.get("attribution_domains").and_then(Value::as_array).map(|items| items.iter().filter_map(Value::as_str).collect::<Vec<_>>().join(", ")).unwrap_or_default();
     let attribution = labeled_text(&panel, &sizer, "Attribution &Domains, comma separated:", &domains);
-    let locked = flag_box(&panel, &sizer, "&Lock account (require follow approval)", profile.get("locked"));
-    let bot = flag_box(&panel, &sizer, "Mark as &bot account", profile.get("bot"));
-    let discoverable = flag_box(&panel, &sizer, "Show in profile directory and discovery", profile.get("discoverable"));
-    let indexable = flag_box(&panel, &sizer, "Allow public posts to be searchable", profile.get("indexable"));
-    let hide_collections = flag_box(&panel, &sizer, "Hide follows and followers", profile.get("hide_collections"));
-    let show_media = flag_box(&panel, &sizer, "Show Media tab", profile.get("show_media"));
-    let show_media_replies = flag_box(&panel, &sizer, "Include replies in Media tab", profile.get("show_media_replies"));
-    let show_featured = flag_box(&panel, &sizer, "Show Featured tab", profile.get("show_featured"));
+    let locked = flag_box(&panel, &sizer, "&Lock account (require follow approval)", profile.get("locked"), false);
+    let bot = flag_box(&panel, &sizer, "Mark as &bot account", profile.get("bot"), false);
+    let discoverable = flag_box(&panel, &sizer, "Show in profile directory and discovery", profile.get("discoverable"), false);
+    let searchable = !profile.get("noindex").and_then(Value::as_bool).unwrap_or(false);
+    let indexable = flag_box(&panel, &sizer, "Allow public posts to be searchable", profile.get("indexable"), searchable);
+    let hide_collections = flag_box(&panel, &sizer, "Hide follows and followers", profile.get("hide_collections"), false);
+    let show_media = flag_box(&panel, &sizer, "Show Media tab", profile.get("show_media"), true);
+    let show_media_replies = flag_box(&panel, &sizer, "Include replies in Media tab", profile.get("show_media_replies"), true);
+    let show_featured = flag_box(&panel, &sizer, "Show Featured tab", profile.get("show_featured"), true);
     let save = Button::builder(&panel).with_label("&Save").build();
     let cancel = Button::builder(&panel).with_label("&Cancel").with_id(ID_CANCEL).build();
     theme::paint(&save);
@@ -1448,8 +1449,8 @@ pub fn edit_profile(app: &Rc<RefCell<App>>) {
     dialog.destroy();
 }
 
-fn flag_box(panel: &Panel, sizer: &BoxSizer, label: &str, value: Option<&Value>) -> CheckBox {
-    let checked = value.and_then(Value::as_bool).unwrap_or(false);
+fn flag_box(panel: &Panel, sizer: &BoxSizer, label: &str, value: Option<&Value>, default: bool) -> CheckBox {
+    let checked = value.and_then(Value::as_bool).unwrap_or(default);
     let checkbox = CheckBox::builder(panel).with_label(label).build();
     checkbox.set_value(checked);
     theme::paint(&checkbox);
