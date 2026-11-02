@@ -1,7 +1,7 @@
 use super::app::{self, App, id_of};
 use super::{alert, confirm, copy_text, error_box, open_browser, prompt, styled_dialog};
 use crate::api::{collection_from_response, collections_from_response, flatten_profile};
-use crate::render::{build_status_body_html, escape_html, links_in_status, status_plain_text, strip_html};
+use crate::render::{build_status_body_html, escape_html, get_quoted_status, links_in_status, status_plain_text, strip_html};
 use crate::rows::{display_name, source_status};
 use crate::sounds;
 use crate::theme;
@@ -1600,6 +1600,11 @@ fn post_details_for(app: &Rc<RefCell<App>>, parent: &impl WxWidget, status: Valu
         source.get("visibility").and_then(Value::as_str).unwrap_or("unknown"),
         source.get("language").and_then(Value::as_str).unwrap_or("unknown")
     );
+    if let Some(quoted) = get_quoted_status(&source) {
+        let author = quoted.get("account").cloned().unwrap_or(Value::Null);
+        let handle = author.get("acct").and_then(Value::as_str).unwrap_or("");
+        details.push_str(&format!("\n\nQuoting {} (@{handle}):\n{}", display_name(&author), status_plain_text(quoted)));
+    }
     if source.pointer("/card/missing_attribution").and_then(Value::as_bool).unwrap_or(false) {
         let card = source.pointer("/card/title").and_then(Value::as_str).or_else(|| source.pointer("/card/url").and_then(Value::as_str)).unwrap_or("link preview");
         details.push_str(&format!("\nAttribution warning: {card} claims to credit you, but its domain is not in your attribution domains."));
