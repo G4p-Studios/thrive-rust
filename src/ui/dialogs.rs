@@ -1187,6 +1187,15 @@ pub fn profile_from_selection(app: &Rc<RefCell<App>>) {
     profile_dialog(app, &frame, &full);
 }
 
+fn approval_names(approval: &Value, key: &str) -> String {
+    approval
+        .get(key)
+        .and_then(Value::as_array)
+        .map(|items| items.iter().filter_map(Value::as_str).filter(|name| !name.is_empty()).collect::<Vec<_>>().join(", "))
+        .filter(|names| !names.is_empty())
+        .unwrap_or_else(|| "nobody".to_string())
+}
+
 fn profile_dialog(app: &Rc<RefCell<App>>, parent: &impl WxWidget, account: &Value) {
     let title = format!("Profile for {} ({})", display_name(account), account.get("acct").and_then(Value::as_str).unwrap_or(""));
     let (dialog, panel, sizer) = styled_dialog(parent, &title, 600, 500);
@@ -1207,6 +1216,28 @@ fn profile_dialog(app: &Rc<RefCell<App>>, parent: &impl WxWidget, account: &Valu
     }
     if let Some(text) = account.get("header_description").and_then(Value::as_str).filter(|text| !text.is_empty()) {
         info.push_str(&format!("\nHeader description: {text}"));
+    }
+    let mut preferences = Vec::new();
+    if let Some(shown) = account.get("show_media").and_then(Value::as_bool) {
+        preferences.push(if shown { "Media tab shown" } else { "Media tab hidden" });
+        if shown && let Some(replies) = account.get("show_media_replies").and_then(Value::as_bool) {
+            preferences.push(if replies { "Media replies included" } else { "Media replies hidden" });
+        }
+    }
+    if let Some(shown) = account.get("show_featured").and_then(Value::as_bool) {
+        preferences.push(if shown { "Featured tab shown" } else { "Featured tab hidden" });
+    }
+    if !preferences.is_empty() {
+        info.push_str("\nProfile preferences: ");
+        info.push_str(&preferences.join(", "));
+    }
+    if let Some(approval) = account.get("feature_approval").filter(|value| value.as_object().is_some_and(|object| !object.is_empty())) {
+        let automatic = approval_names(approval, "automatic");
+        let manual = approval_names(approval, "manual");
+        info.push_str(&format!("\nCollection approval: automatic for {automatic}; manual review for {manual}"));
+        if let Some(current) = approval.get("current_user").and_then(Value::as_str).filter(|text| !text.is_empty()) {
+            info.push_str(&format!("; you are {current}"));
+        }
     }
     let relationship = if id_of(account) != id_of(&app.borrow().me) {
         app.borrow().api.relationships(&id_of(account)).ok().and_then(|value| value.as_array().and_then(|items| items.first().cloned()))
