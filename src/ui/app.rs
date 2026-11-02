@@ -2081,7 +2081,22 @@ fn clear_notifications(app: &Rc<RefCell<App>>) {
 }
 
 fn follow_request_action(app: &Rc<RefCell<App>>, action: &str, title: &str) {
-    let Some(account) = selected_account(app) else {
+    let account = {
+        let state = app.borrow();
+        let index = state.posts.get_first_selected_item();
+        if index < 0 {
+            None
+        } else {
+            selected_key(&state).and_then(|key| {
+                state
+                    .timelines
+                    .get(&key)
+                    .and_then(|items| items.get(index as usize))
+                    .and_then(|item| notification_account(&key, item))
+            })
+        }
+    };
+    let Some(account) = account else {
         return;
     };
     let frame = app.borrow().frame;
@@ -2156,15 +2171,49 @@ fn remove_from_timeline(app: &Rc<RefCell<App>>, key: &str, id: &str) {
     }
 }
 
+fn notification_account(key: &str, item: &Value) -> Option<Value> {
+    if key == "notifications"
+        && let Some(account) = item.get("account").filter(|value| value.is_object())
+    {
+        return Some(account.clone());
+    }
+    let status = if key == "notifications" {
+        item.get("status").filter(|value| !value.is_null())?
+    } else {
+        item
+    };
+    source_status(status).get("account").cloned()
+}
+
 fn show_context_menu(app: &Rc<RefCell<App>>) {
-    if app.borrow().posts.get_first_selected_item() < 0 {
+    let index = app.borrow().posts.get_first_selected_item();
+    if index < 0 {
         return;
     }
-    let Some((status, _)) = selected_status(&app.borrow()) else {
+    let Some(key) = selected_key(&app.borrow()) else {
+        return;
+    };
+    let Some(item) = app.borrow().timelines.get(&key).and_then(|items| items.get(index as usize)).cloned() else {
+        return;
+    };
+    let status = if key == "notifications" {
+        item.get("status").filter(|value| value.is_object()).cloned()
+    } else {
+        Some(item.clone())
+    };
+    let mut menu = Menu::builder().build();
+    let Some(status) = status else {
+        if item.get("type").and_then(Value::as_str) == Some("follow_request") {
+            menu.append(ACCEPT, "&Accept Follow Request", "", ItemKind::Normal);
+            menu.append(REJECT, "Re&ject Follow Request", "", ItemKind::Normal);
+            menu.append_separator();
+            menu.append(DISMISS, "D&ismiss Notification", "", ItemKind::Normal);
+            menu.append(CLEAR_NOTIFICATIONS, "C&lear All Notifications", "", ItemKind::Normal);
+            app.borrow().posts.popup_menu(&mut menu, None);
+        }
         return;
     };
     let source = source_status(&status);
-    let mut menu = Menu::builder().build();
     menu.append(REPLY, "&Reply\tCtrl+R", "", ItemKind::Normal);
     menu.append(QUOTE, "&Quote\tCtrl+Q", "", ItemKind::Normal);
     let boost_label = if status.get("reblogged").and_then(Value::as_bool).unwrap_or(false) { "Un&boost\tCtrl+Shift+R" } else { "&Boost\tCtrl+Shift+R" };
@@ -2201,12 +2250,14 @@ fn show_context_menu(app: &Rc<RefCell<App>>) {
     menu.append(MUTE_CONVO, "Mute Con&versation", "", ItemKind::Normal);
     menu.append(REPORT, "&Report Post/User...", "", ItemKind::Normal);
     menu.append(DM, "Send &Direct Message\tCtrl+D", "", ItemKind::Normal);
-    if let Some(key) = selected_key(&app.borrow())
-        && (key == "notifications" || key == "mentions")
-    {
+    if key == "notifications" || key == "mentions" {
         menu.append_separator();
         menu.append(DISMISS, "D&ismiss Notification", "", ItemKind::Normal);
         menu.append(CLEAR_NOTIFICATIONS, "C&lear All Notifications", "", ItemKind::Normal);
+        if item.get("type").and_then(Value::as_str) == Some("follow_request") {
+            menu.append(ACCEPT, "&Accept Follow Request", "", ItemKind::Normal);
+            menu.append(REJECT, "Re&ject Follow Request", "", ItemKind::Normal);
+        }
     }
     app.borrow().posts.popup_menu(&mut menu, None);
 }
