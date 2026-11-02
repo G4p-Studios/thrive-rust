@@ -231,6 +231,14 @@ impl Mastodon {
         self.request("PUT", &format!("/api/v1/statuses/{id}"), Body::Form(fields))
     }
 
+    pub fn poll_vote(&self, id: &str, choice: i64) -> Result<Value, String> {
+        self.request(
+            "POST",
+            &format!("/api/v1/polls/{id}/votes"),
+            Body::Form(vec![("choices[]".to_string(), choice.to_string())]),
+        )
+    }
+
     pub fn status_context(&self, id: &str) -> Result<Value, String> {
         self.get(&format!("/api/v1/statuses/{id}/context"), &[])
     }

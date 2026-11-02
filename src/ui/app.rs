@@ -2047,6 +2047,39 @@ fn follow_request_action(app: &Rc<RefCell<App>>, action: &str, title: &str) {
     }
 }
 
+pub(crate) fn store_poll(app: &Rc<RefCell<App>>, status_id: &str, poll: &Value) {
+    let mut state = app.borrow_mut();
+    let current = selected_key(&state);
+    let show_avatars = state.show_avatars;
+    let keys: Vec<String> = state.timelines.keys().cloned().collect();
+    for key in keys {
+        let Some(items) = state.timelines.get_mut(&key) else {
+            continue;
+        };
+        let mut rows = Vec::new();
+        for (index, item) in items.iter_mut().enumerate() {
+            if id_of(item) != status_id && id_of(&source_status(item)) != status_id {
+                continue;
+            }
+            if let Some(reblog) = item.get_mut("reblog").filter(|value| value.is_object()) {
+                reblog["poll"] = poll.clone();
+            } else {
+                item["poll"] = poll.clone();
+            }
+            if current.as_deref() == Some(key.as_str())
+                && let Some((row, _)) = crate::rows::row_from_status(item, show_avatars)
+            {
+                rows.push((index, row));
+            }
+        }
+        for (index, row) in rows {
+            for (column, text) in row.iter().enumerate() {
+                state.posts.set_item_text_by_column(index as i64, column as i32, text);
+            }
+        }
+    }
+}
+
 fn refresh_row(app: &Rc<RefCell<App>>, index: usize, status: &Value) {
     let mut state = app.borrow_mut();
     let Some(key) = selected_key(&state) else {

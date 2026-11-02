@@ -11,6 +11,7 @@ use std::cell::RefCell;
 use std::rc::Rc;
 use wxdragon::event::{WebViewEventData, WebViewEvents};
 use wxdragon::prelude::*;
+use wxdragon::sizers::staticbox_sizer::StaticBoxSizerBuilder;
 use wxdragon::widgets::WebView;
 
 pub fn settings(app: &Rc<RefCell<App>>) {
@@ -1612,6 +1613,9 @@ fn post_details_for(app: &Rc<RefCell<App>>, parent: &impl WxWidget, status: Valu
     sizer.add(&content, 1, SizerFlag::All | SizerFlag::Expand, 5);
     sizer.add(&details_label, 0, SizerFlag::All, 5);
     sizer.add(&details_box, 0, SizerFlag::All | SizerFlag::Expand, 5);
+    if let Some(poll) = source.get("poll").filter(|value| value.is_object()) {
+        add_poll(app, dialog, &panel, &sizer, &id_of(&source), poll);
+    }
     let links = links_in_status(&source);
     let reply = Button::builder(&panel).with_label("&Reply").build();
     let boost = Button::builder(&panel).with_label(if source.get("reblogged").and_then(Value::as_bool).unwrap_or(false) { "Un&boost" } else { "&Boost" }).build();
@@ -1710,6 +1714,112 @@ fn post_details_for(app: &Rc<RefCell<App>>, parent: &impl WxWidget, status: Valu
     content.set_focus();
     dialog.show_modal();
     dialog.destroy();
+}
+
+fn add_poll(app: &Rc<RefCell<App>>, dialog: Dialog, panel: &Panel, sizer: &BoxSizer, status_id: &str, poll: &Value) {
+    let options = poll.get("options").and_then(Value::as_array).cloned().unwrap_or_default();
+    if options.is_empty() {
+        return;
+    }
+    let voted = poll.get("voted").and_then(Value::as_bool).unwrap_or(false);
+    let expired = poll.get("expired").and_then(Value::as_bool).unwrap_or(false);
+    let show_results = voted || expired;
+    let labels: Vec<String> = options
+        .iter()
+        .map(|option| {
+            let title = option.get("title").and_then(Value::as_str).unwrap_or("");
+            if show_results {
+                format!("{title} ({} votes)", option.get("votes_count").and_then(Value::as_i64).unwrap_or(0))
+            } else {
+                title.to_string()
+            }
+        })
+        .collect();
+    let label_refs: Vec<&str> = labels.iter().map(String::as_str).collect();
+    let poll_sizer = StaticBoxSizerBuilder::new_with_label(Orientation::Vertical, panel, "Poll").build();
+    if let Some(poll_box) = poll_sizer.get_static_box() {
+        theme::paint(&poll_box);
+    }
+    let radios = RadioBox::builder(panel, &label_refs)
+        .with_major_dimension(1)
+        .with_style(RadioBoxStyle::SpecifyCols)
+        .build();
+    if let Some(index) = own_vote_index(poll) {
+        radios.set_selection(index);
+    }
+    let vote = Button::builder(panel).with_label("&Vote").build();
+    vote.enable(!voted && !expired);
+    let info = StaticText::builder(panel).with_label(&poll_info(poll)).build();
+    theme::paint(&radios);
+    theme::paint(&vote);
+    theme::paint(&info);
+    poll_sizer.add(&radios, 0, SizerFlag::Expand | SizerFlag::All, 5);
+    poll_sizer.add(&vote, 0, SizerFlag::All, 5);
+    poll_sizer.add(&info, 0, SizerFlag::All, 5);
+    sizer.add_sizer(&poll_sizer, 0, SizerFlag::Expand | SizerFlag::All, 5);
+
+    let api = app.borrow().api.clone();
+    let app_vote = app.clone();
+    let poll_id = poll.get("id").and_then(Value::as_str).unwrap_or("").to_string();
+    let status_id = status_id.to_string();
+    let panel = *panel;
+    vote.on_click(move |_| {
+        let selection = radios.get_selection();
+        if selection < 0 {
+            alert(&dialog, "Please select an option to vote.", "No Selection");
+            return;
+        }
+        match api.poll_vote(&poll_id, selection as i64) {
+            Ok(updated) => {
+                sounds::play("votesnd");
+                app::store_poll(&app_vote, &status_id, &updated);
+                vote.enable(false);
+                info.set_label(&poll_results(&updated));
+                panel.layout();
+                alert(&dialog, "Your vote has been cast successfully!", "Vote Cast");
+            }
+            Err(error) => error_box(&dialog, &format!("Failed to cast vote: {error}"), "Error"),
+        }
+    });
+}
+
+fn own_vote_index(poll: &Value) -> Option<i32> {
+    let votes = poll.get("own_votes")?.as_array()?;
+    let first = votes.first()?;
+    first
+        .as_i64()
+        .or_else(|| first.as_str().and_then(|text| text.parse().ok()))
+        .map(|index| index as i32)
+}
+
+fn poll_info(poll: &Value) -> String {
+    let mut text = format!("Total votes: {}", poll.get("votes_count").and_then(Value::as_i64).unwrap_or(0));
+    if poll.get("expired").and_then(Value::as_bool).unwrap_or(false) {
+        text.push_str(" - Poll is closed.");
+    }
+    text
+}
+
+fn poll_results(poll: &Value) -> String {
+    let mut text = poll_info(poll);
+    if let Some(options) = poll.get("options").and_then(Value::as_array) {
+        let parts: Vec<String> = options
+            .iter()
+            .map(|option| {
+                format!(
+                    "{}: {}",
+                    option.get("title").and_then(Value::as_str).unwrap_or(""),
+                    option.get("votes_count").and_then(Value::as_i64).unwrap_or(0)
+                )
+            })
+            .collect();
+        if !parts.is_empty() {
+            text.push(' ');
+            text.push_str(&parts.join(", "));
+            text.push('.');
+        }
+    }
+    text
 }
 
 fn show_links(parent: &impl WxWidget, links: &[String]) {
