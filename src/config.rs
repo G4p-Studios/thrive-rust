@@ -32,26 +32,31 @@ fn read_key(key: &str) -> Option<String> {
     None
 }
 
-pub fn sounds_dir() -> PathBuf {
-    let local = PathBuf::from("sounds");
-    if local.is_dir() {
-        return local;
+pub fn sounds_dirs() -> Vec<PathBuf> {
+    let mut dirs = Vec::new();
+    if let Some(dir) = std::env::current_exe().ok().and_then(|path| path.parent().map(|dir| dir.join("sounds"))) {
+        dirs.push(dir);
     }
-    std::env::current_exe()
-        .ok()
-        .and_then(|path| path.parent().map(|dir| dir.join("sounds")))
-        .filter(|path| path.is_dir())
-        .unwrap_or(local)
+    let working = PathBuf::from("sounds");
+    if dirs.iter().all(|dir| dir != &working) {
+        dirs.push(working);
+    }
+    dirs
 }
 
 pub fn sound_packs() -> Vec<String> {
     let mut packs = Vec::new();
-    let root = sounds_dir();
-    if let Ok(entries) = fs::read_dir(&root) {
+    for root in sounds_dirs() {
+        let Ok(entries) = fs::read_dir(&root) else {
+            continue;
+        };
         for entry in entries.flatten() {
             let name = entry.file_name().to_string_lossy().to_string();
             if entry.path().is_dir() && name.to_ascii_lowercase().starts_with("mastodon-") {
-                packs.push(name[9..].to_string());
+                let short = name[9..].to_string();
+                if !packs.contains(&short) {
+                    packs.push(short);
+                }
             }
         }
     }
@@ -62,11 +67,18 @@ pub fn sound_packs() -> Vec<String> {
     packs
 }
 
-pub fn sound_file(pack: &str, file_name: &str) -> PathBuf {
-    let root = sounds_dir();
-    let preferred = root.join(format!("Mastodon-{pack}")).join(file_name);
-    if preferred.is_file() {
-        return preferred;
+pub fn sound_file(pack: &str, file_name: &str) -> Option<PathBuf> {
+    for root in sounds_dirs() {
+        for folder in [format!("Mastodon-{pack}"), format!("mastodon-{pack}")] {
+            let nested = root.join(folder).join(file_name);
+            if nested.is_file() {
+                return Some(nested);
+            }
+        }
+        let flat = root.join(file_name);
+        if flat.is_file() {
+            return Some(flat);
+        }
     }
-    root.join(format!("mastodon-{pack}")).join(file_name)
+    None
 }

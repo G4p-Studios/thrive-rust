@@ -49,7 +49,9 @@ pub fn play(name: &str) {
     let Some((_, file_name)) = FILES.iter().find(|(key, _)| *key == name) else {
         return;
     };
-    let path = crate::config::sound_file(&crate::config::sound_pack(), file_name);
+    let Some(path) = crate::config::sound_file(&crate::config::sound_pack(), file_name) else {
+        return;
+    };
     let Ok(file) = File::open(path) else {
         return;
     };

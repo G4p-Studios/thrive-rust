@@ -17,6 +17,10 @@ pub fn is_dark() -> bool {
     use_custom_colours() && system_prefers_dark()
 }
 
+pub fn list_colours() -> Option<(Colour, Colour)> {
+    is_dark().then_some((DARK_BG, LIGHT_TEXT))
+}
+
 pub fn paint(widget: &impl WxWidget) {
     if !is_dark() {
         return;

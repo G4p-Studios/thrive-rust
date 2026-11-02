@@ -211,11 +211,6 @@ pub fn open(api: Mastodon, me: Value) {
     posts.insert_column(1, "Content", ListColumnFormat::Left, 640);
     posts.insert_column(2, "Time", ListColumnFormat::Left, 140);
     posts.insert_column(3, "Client", ListColumnFormat::Left, 140);
-    if let Some(blank) = Bitmap::from_rgba(&[0u8; 48 * 48 * 4], 48, 48) {
-        let images = ImageList::new(48, 48, false, 1);
-        images.add_bitmap(&blank);
-        posts.set_image_list(images, image_list_type::SMALL);
-    }
     theme::paint(&posts);
 
     let toot_label = StaticText::builder(&panel).with_label("&Create New Post").build();
@@ -381,6 +376,9 @@ pub fn open(api: Mastodon, me: Value) {
     columns.add(&posts, 1, SizerFlag::Expand | SizerFlag::All, 5);
     vbox.add_sizer(&columns, 1, SizerFlag::Expand, 0);
     panel.set_sizer(vbox, true);
+    let frame_sizer = BoxSizer::builder(Orientation::Vertical).build();
+    frame_sizer.add(&panel, 1, SizerFlag::Expand, 0);
+    frame.set_sizer(frame_sizer, true);
 
     let app = Rc::new(RefCell::new(App {
         api,
@@ -445,7 +443,10 @@ pub fn open(api: Mastodon, me: Value) {
     timer.start(200, false);
     std::mem::forget(timer);
     frame.show(true);
+    frame.layout();
+    panel.layout();
     frame.centre();
+    reveal_list(&app.borrow().posts);
     app.borrow().toot.set_focus();
 }
 
@@ -650,98 +651,17 @@ fn on_key(app: &Rc<RefCell<App>>, event: &KeyboardEvent) {
     let shift = event.shift_down();
     let alt = event.alt_down();
     let typing = app.borrow().focus.load(Ordering::Relaxed) == 1;
-    let letter = key_letter(code);
-    if ctrl && !shift && !alt && letter == Some('N') {
-        app.borrow().toot.set_focus();
-        return;
-    }
+    // Menu items already carry these shortcuts. Handling them here as well
+    // ran the action twice, so the sound and the announcement both doubled.
     if code == WXK_RETURN && typing && (ctrl || shift || alt) {
         post(app);
         return;
     }
-    if typing {
-        event.event.skip(true);
+    if !typing && code == WXK_PAGEUP && alt && !ctrl && !shift {
+        load_older(app);
         return;
     }
-    let mut handled = true;
-    if ctrl && !shift && !alt {
-        match letter {
-            Some('R') => reply(app),
-            Some('Q') => quote(app),
-            Some('F') => favourite(app),
-            Some('E') => edit_post(app),
-            Some('G') => thread(app),
-            Some('L') => relationship_toggle(app, "following", "follow", "unfollow", "Follow"),
-            Some('B') => relationship_confirm(app, "blocking", "block", "unblock", "Block"),
-            Some('D') => direct_message(app),
-            Some('U') => user_timeline(app),
-            Some('C') => copy_post(app),
-            Some('T') => dialogs::explore(app),
-            Some('I') => dialogs::instance_info(app),
-            Some('/') => search(app),
-            Some('[') => dialogs::account_list(app, "My Followers", "followers"),
-            Some(']') => dialogs::account_list(app, "My Following", "following"),
-            _ => handled = false,
-        }
-    } else if ctrl && shift && !alt {
-        match letter {
-            Some('R') => boost(app),
-            Some('F') => favourite(app),
-            Some('L') => relationship_toggle(app, "following", "follow", "unfollow", "Follow"),
-            Some('B') => relationship_confirm(app, "blocking", "block", "unblock", "Block"),
-            Some('U') => dialogs::profile_from_selection(app),
-            _ => handled = false,
-        }
-    } else if ctrl && alt && !shift {
-        match letter {
-            Some('K') => {
-                sounds::play("favoritessnd");
-                select_key(app, "favourites");
-            }
-            Some('B') => select_key(app, "bookmarks"),
-            _ => handled = false,
-        }
-    } else if alt && !ctrl && !shift {
-        match letter {
-            Some('B') => bookmark(app),
-            Some('V') => dialogs::post_details(app),
-            Some('W') => open_post(app),
-            Some('P') => select_key(app, "federated"),
-            Some('L') => select_key(app, "local"),
-            _ if code == WXK_PAGEUP => load_older(app),
-            _ => handled = false,
-        }
-    } else if alt && shift && letter == Some('B') {
-        bookmark(app);
-    } else if code == WXK_DELETE && app.borrow().focus.load(Ordering::Relaxed) == 2 {
-        delete_selected(app);
-    } else {
-        handled = false;
-    }
-    if !handled {
-        event.event.skip(true);
-    }
-}
-
-fn key_letter(code: i32) -> Option<char> {
-    if (1..=26).contains(&code) {
-        return Some((b'A' + code as u8 - 1) as char);
-    }
-    if code == WXK_NUMPAD_DIVIDE || code == b'/' as i32 {
-        return Some('/');
-    }
-    if code == b'[' as i32 {
-        return Some('[');
-    }
-    if code == b']' as i32 {
-        return Some(']');
-    }
-    let ch = char::from_u32(code as u32)?;
-    if ch.is_ascii_alphabetic() {
-        Some(ch.to_ascii_uppercase())
-    } else {
-        None
-    }
+    event.event.skip(true);
 }
 
 fn toggle_cw(app: &Rc<RefCell<App>>) {
@@ -1093,13 +1013,20 @@ fn refill(state: &mut App) {
         };
         append_row(state, &row, avatar);
     }
+    reveal_list(&state.posts);
 }
 
 fn append_row(state: &mut App, row: &[String], avatar: Option<String>) {
-    let index = state.posts.insert_item(state.posts.get_item_count() as i64, row.first().map(String::as_str).unwrap_or(""), Some(0));
+    let image = avatar.as_ref().and_then(|url| state.avatar_ids.get(url).copied());
+    let index = state.posts.insert_item(
+        state.posts.get_item_count() as i64,
+        row.first().map(String::as_str).unwrap_or(""),
+        image,
+    );
     for (column, text) in row.iter().enumerate().skip(1) {
         state.posts.set_item_text_by_column(index as i64, column as i32, text);
     }
+    paint_row(&state.posts, index as i64);
     if let Some(url) = avatar.clone() {
         if let Some(image) = state.avatar_ids.get(&url).copied() {
             state.posts.set_item_image(index as i64, image);
@@ -1130,12 +1057,30 @@ fn queue_avatar(state: &mut App, url: String) {
     });
 }
 
+fn paint_row(posts: &ListCtrl, index: i64) {
+    if let Some((background, foreground)) = theme::list_colours() {
+        posts.set_item_background_colour(index, &background);
+        posts.set_item_text_colour(index, &foreground);
+    }
+}
+
+fn reveal_list(posts: &ListCtrl) {
+    let width = posts.get_column_width(0);
+    if width > 0 {
+        posts.set_column_width(0, width);
+    }
+    posts.refresh(false, None);
+}
+
 fn insert_row(state: &mut App, row: &[String], avatar: Option<String>) {
-    let index = state.posts.insert_item(0, row.first().map(String::as_str).unwrap_or(""), Some(0));
+    let image = avatar.as_ref().and_then(|url| state.avatar_ids.get(url).copied());
+    let index = state.posts.insert_item(0, row.first().map(String::as_str).unwrap_or(""), image);
     for (column, text) in row.iter().enumerate().skip(1) {
         state.posts.set_item_text_by_column(index as i64, column as i32, text);
     }
+    paint_row(&state.posts, index as i64);
     state.row_avatars.insert(0, avatar);
+    reveal_list(&state.posts);
 }
 
 fn drain(app: &Rc<RefCell<App>>) {
@@ -1182,6 +1127,7 @@ fn apply_timeline(app: &Rc<RefCell<App>>, key: String, generation: u64, result: 
                         };
                         append_row(&mut state, &row, avatar);
                     }
+                    reveal_list(&state.posts);
                 } else {
                     refill(&mut state);
                 }
@@ -1212,6 +1158,7 @@ fn apply_stream(app: &Rc<RefCell<App>>, value: Value) {
         }
         _ => {}
     }
+    reveal_list(&state.posts);
 }
 
 fn add_status(state: &mut App, status: Value) {
@@ -1309,6 +1256,10 @@ fn apply_avatar(app: &Rc<RefCell<App>>, url: String, pixels: Vec<u8>) {
     let Some(bitmap) = Bitmap::from_rgba(&pixels, 48, 48) else {
         return;
     };
+    if state.posts.get_image_list(image_list_type::SMALL).is_none() {
+        let images = ImageList::new(48, 48, false, 4);
+        state.posts.set_image_list(images, image_list_type::SMALL);
+    }
     let Some(images) = state.posts.get_image_list(image_list_type::SMALL) else {
         return;
     };
@@ -1319,6 +1270,7 @@ fn apply_avatar(app: &Rc<RefCell<App>>, url: String, pixels: Vec<u8>) {
             state.posts.set_item_image(row as i64, index);
         }
     }
+    reveal_list(&state.posts);
 }
 
 fn spawn_stream(app: &Rc<RefCell<App>>) {
