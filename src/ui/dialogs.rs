@@ -144,7 +144,10 @@ pub fn find(app: &Rc<RefCell<App>>) {
     let Some(query) = prompt(&frame, "Search text:", "Find in Timeline") else {
         return;
     };
-    let query = query.to_lowercase();
+    let query = query.trim().to_lowercase();
+    if query.is_empty() {
+        return;
+    }
     let state = app.borrow();
     let items = state.timelines.get(&key).cloned().unwrap_or_default();
     drop(state);
