@@ -1235,7 +1235,7 @@ fn add_notification(state: &mut App, notification: Value) {
     }
 }
 
-fn replace_status(state: &mut App, status: Value) {
+pub(crate) fn replace_status(state: &mut App, status: Value) {
     let id = id_of(&status);
     for key in ["home", "local", "federated", "sent", "mentions", "direct_messages", "favourites", "bookmarks"] {
         let Some(items) = state.timelines.get_mut(key) else {
@@ -1774,7 +1774,14 @@ fn edit_post(app: &Rc<RefCell<App>>) {
         return;
     }
     let frame = app.borrow().frame;
-    let (dialog, panel, sizer) = super::styled_dialog(&frame, "Edit Post", 500, 300);
+    if let Some(updated) = edit_status(app, &frame, &source) {
+        let mut state = app.borrow_mut();
+        replace_status(&mut state, updated);
+    }
+}
+
+pub(crate) fn edit_status(app: &Rc<RefCell<App>>, parent: &impl WxWidget, source: &Value) -> Option<Value> {
+    let (dialog, panel, sizer) = super::styled_dialog(parent, "Edit Post", 500, 300);
     let label = StaticText::builder(&panel).with_label("&Edit Post").build();
     let text = TextCtrl::builder(&panel)
         .with_value(&status_plain_text(&source))
@@ -1804,9 +1811,10 @@ fn edit_post(app: &Rc<RefCell<App>>) {
     sizer.add_sizer(&buttons, 0, SizerFlag::AlignRight | SizerFlag::Right | SizerFlag::Bottom, 10);
     panel.set_sizer(sizer, true);
     let api = app.borrow().api.clone();
-    let id = id_of(&source);
+    let id = id_of(source);
     let dialog_save = dialog;
-    let app_save = app.clone();
+    let updated = Rc::new(RefCell::new(None));
+    let updated_save = updated.clone();
     save.on_click(move |_| {
         let body = text.get_value().trim().to_string();
         if body.is_empty() {
@@ -1816,10 +1824,8 @@ fn edit_post(app: &Rc<RefCell<App>>) {
         let warning = spoiler.get_value();
         let warning = warning.trim();
         match api.status_update(&id, &body, if warning.is_empty() { None } else { Some(warning) }) {
-            Ok(updated) => {
-                let mut state = app_save.borrow_mut();
-                replace_status(&mut state, updated);
-                drop(state);
+            Ok(status) => {
+                *updated_save.borrow_mut() = Some(status);
                 dialog_save.end_modal(ID_OK);
             }
             Err(error) => error_box(&dialog_save, &format!("Error editing post: {error}"), "Error"),
@@ -1827,6 +1833,7 @@ fn edit_post(app: &Rc<RefCell<App>>) {
     });
     dialog.show_modal();
     dialog.destroy();
+    updated.borrow().clone()
 }
 
 fn pin_post(app: &Rc<RefCell<App>>) {
@@ -1840,15 +1847,27 @@ fn pin_post(app: &Rc<RefCell<App>>) {
         return;
     }
     let pinned = source.get("pinned").and_then(Value::as_bool).unwrap_or(false);
-    let id = id_of(&source);
+    let _ = set_pinned(app, &frame, &id_of(&source), pinned);
+}
+
+pub(crate) fn set_pinned(app: &Rc<RefCell<App>>, parent: &impl WxWidget, id: &str, pinned: bool) -> bool {
     let result = if pinned {
-        app.borrow().api.status_action(&id, "unpin")
+        app.borrow().api.status_action(id, "unpin")
     } else {
-        app.borrow().api.status_action(&id, "pin")
+        app.borrow().api.status_action(id, "pin")
     };
     match result {
-        Ok(_) => alert(&frame, if pinned { "Post unpinned." } else { "Post pinned." }, "Pin"),
-        Err(error) => error_box(&frame, &format!("Error: {error}"), "Pin Error"),
+        Ok(updated) => {
+            let mut state = app.borrow_mut();
+            replace_status(&mut state, updated);
+            drop(state);
+            alert(parent, if pinned { "Post unpinned." } else { "Post pinned." }, "Pin");
+            true
+        }
+        Err(error) => {
+            error_box(parent, &format!("Error: {error}"), "Pin Error");
+            false
+        }
     }
 }
 

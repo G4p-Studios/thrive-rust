@@ -1635,11 +1635,19 @@ fn post_details_for(app: &Rc<RefCell<App>>, parent: &impl WxWidget, status: Valu
         buttons.add(button, 0, SizerFlag::All, 5);
     }
     let own = id_of(&account) == id_of(&app.borrow().me);
-    let delete = if own {
+    let own_buttons = if own {
+        let edit = Button::builder(&panel).with_label("&Edit").build();
+        let pin = Button::builder(&panel)
+            .with_label(if source.get("pinned").and_then(Value::as_bool).unwrap_or(false) { "Un&pin" } else { "&Pin" })
+            .build();
         let delete = Button::builder(&panel).with_label("Take &down").build();
+        theme::paint(&edit);
+        theme::paint(&pin);
         theme::paint(&delete);
+        buttons.add(&edit, 0, SizerFlag::All, 5);
+        buttons.add(&pin, 0, SizerFlag::All, 5);
         buttons.add(&delete, 0, SizerFlag::All, 5);
-        Some(delete)
+        Some((edit, pin, delete))
     } else {
         None
     };
@@ -1693,7 +1701,29 @@ fn post_details_for(app: &Rc<RefCell<App>>, parent: &impl WxWidget, status: Valu
             sounds::play("replysnd");
         }
     });
-    if let Some(delete) = delete {
+    if let Some((edit, pin, delete)) = own_buttons {
+        let source_edit = source.clone();
+        let app_edit = app.clone();
+        let dialog_edit = dialog;
+        let content_edit = content;
+        edit.on_click(move |_| {
+            if let Some(updated) = app::edit_status(&app_edit, &dialog_edit, &source_edit) {
+                content_edit.set_page(&post_document(&updated), "");
+                let mut state = app_edit.borrow_mut();
+                app::replace_status(&mut state, updated);
+            }
+        });
+        let app_pin = app.clone();
+        let dialog_pin = dialog;
+        let status_id = id_of(&source);
+        let pinned = std::cell::Cell::new(source.get("pinned").and_then(Value::as_bool).unwrap_or(false));
+        pin.on_click(move |_| {
+            if app::set_pinned(&app_pin, &dialog_pin, &status_id, pinned.get()) {
+                let was_pinned = pinned.get();
+                pinned.set(!was_pinned);
+                pin.set_label(if was_pinned { "&Pin" } else { "Un&pin" });
+            }
+        });
         let api = app.borrow().api.clone();
         let app_delete = app.clone();
         let id = id_of(&source);
