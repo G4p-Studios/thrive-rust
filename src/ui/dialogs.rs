@@ -1,7 +1,7 @@
 use super::app::{self, App, id_of};
 use super::{alert, confirm, copy_text, error_box, open_browser, prompt, styled_dialog};
 use crate::api::{collection_from_response, collections_from_response, flatten_profile};
-use crate::render::{links_in_status, status_plain_text, strip_html};
+use crate::render::{build_status_body_html, escape_html, links_in_status, status_plain_text, strip_html};
 use crate::rows::{display_name, source_status};
 use crate::sounds;
 use crate::theme;
@@ -9,7 +9,9 @@ use crate::timeutil::{clock_time, long_date};
 use serde_json::{Value, json};
 use std::cell::RefCell;
 use std::rc::Rc;
+use wxdragon::event::{WebViewEventData, WebViewEvents};
 use wxdragon::prelude::*;
+use wxdragon::widgets::WebView;
 
 pub fn settings(app: &Rc<RefCell<App>>) {
     let frame = app.borrow().frame;
@@ -1490,16 +1492,102 @@ pub fn post_details(app: &Rc<RefCell<App>>) {
     post_details_for(app, &frame, status);
 }
 
+const POST_WEBVIEW_SCRIPT: &str = "function addEvent(elem, event, handler) { \
+if (elem.addEventListener) { \
+elem.addEventListener(event, handler, false); \
+} else if (elem.attachEvent) { \
+elem.attachEvent('on' + event, handler); \
+} \
+} \
+addEvent(document, 'keydown', function(event) { \
+if (event.key === 'Escape' || event.keyCode === 27) { \
+window.wx.postMessage('close_dialog'); \
+} \
+}); \
+addEvent(document, 'click', function(event) { \
+event = event || window.event; \
+var target = event.target || event.srcElement; \
+while (target && target.tagName !== 'A') { target = target.parentNode; } \
+if (target && target.tagName === 'A' && target.href) { \
+if (event.preventDefault) event.preventDefault(); \
+else event.returnValue = false; \
+window.wx.postMessage('open_link:' + target.href); \
+} \
+});";
+
+fn post_document(status: &Value) -> String {
+    let account = status.get("account").cloned().unwrap_or(Value::Null);
+    let name = escape_html(&display_name(&account));
+    let acct = escape_html(account.get("acct").and_then(Value::as_str).unwrap_or(""));
+    let (background, foreground, border) = if theme::is_dark() {
+        ("#282828", "#ffffff", "#888888")
+    } else {
+        ("#ffffff", "#1b1b1b", "GrayText")
+    };
+    format!(
+        "<html><head><meta charset=\"utf-8\"><title>Post content</title><style>\
+body {{ font-family: sans-serif; padding: 10px; line-height: 1.5; background: {background}; color: {foreground}; }}\
+a {{ color: {foreground}; }}\
+article {{ border: 1px solid {border}; border-radius: 4px; margin: 0 0 12px 0; padding: 10px 12px; }}\
+.content-warning {{ border: 1px solid {border}; padding: 6px 8px; }}\
+img, video {{ max-width: 100%; height: auto; }}\
+p {{ margin: 0; }}\
+p + p {{ margin-top: 1.5em; }}\
+p, span, div, pre, code {{ white-space: pre-wrap; }}\
+</style></head><body><h2>{name} <small>({acct})</small></h2>{}{}</body></html>",
+        build_status_body_html(status),
+        media_html(status)
+    )
+}
+
+fn media_html(status: &Value) -> String {
+    let Some(media) = status.get("media_attachments").and_then(Value::as_array).filter(|items| !items.is_empty()) else {
+        return String::new();
+    };
+    let mut html = String::from("<section aria-labelledby=\"media-heading\"><h2 id=\"media-heading\">Media</h2><ul>");
+    for (index, attachment) in media.iter().enumerate() {
+        let kind = match attachment.get("type").and_then(Value::as_str).unwrap_or("") {
+            "image" => "Image",
+            "gifv" => "GIF",
+            "video" => "Video",
+            "audio" => "Audio",
+            _ => "Attachment",
+        };
+        let description = attachment
+            .get("description")
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|text| !text.is_empty())
+            .map_or_else(|| "No description".to_string(), escape_html);
+        html.push_str(&format!("<li>{kind} {}: {description}</li>", index + 1));
+    }
+    html.push_str("</ul></section>");
+    html
+}
+
 fn post_details_for(app: &Rc<RefCell<App>>, parent: &impl WxWidget, status: Value) {
     let source = source_status(&status);
     let account = source.get("account").cloned().unwrap_or(Value::Null);
     let title = format!("View Post from {} ({}) dialog", display_name(&account), account.get("acct").and_then(Value::as_str).unwrap_or(""));
     let (dialog, panel, sizer) = styled_dialog(parent, &title, 700, 560);
     let content_label = StaticText::builder(&panel).with_label("Post C&ontent").build();
-    let content = TextCtrl::builder(&panel)
-        .with_value(&status_plain_text(&source))
-        .with_style(TextCtrlStyle::MultiLine | TextCtrlStyle::ReadOnly)
-        .build();
+    let content = WebView::builder(&panel).build();
+    content.add_script_message_handler("wx");
+    let dialog_message = dialog;
+    content.on_script_message_received(move |event: WebViewEventData| {
+        if let Some(message) = event.get_string() {
+            if message == "close_dialog" {
+                dialog_message.end_modal(ID_CANCEL);
+            } else if let Some(url) = message.strip_prefix("open_link:") {
+                let _ = launch_default_browser(url, BrowserLaunchFlags::Default);
+            }
+        }
+    });
+    let content_loaded = content;
+    content.on_loaded(move |_| {
+        content_loaded.run_script(POST_WEBVIEW_SCRIPT);
+    });
+    content.set_page(&post_document(&source), "");
     let created = source.get("created_at").and_then(Value::as_str).unwrap_or("");
     let mut details = format!(
         "Posted: {}\nFrom: {}\nBoosted {} times\nFavorited {} times.\n{} replies\nPrivacy: {}\nLanguage: {}",
@@ -1518,7 +1606,6 @@ fn post_details_for(app: &Rc<RefCell<App>>, parent: &impl WxWidget, status: Valu
     let details_label = StaticText::builder(&panel).with_label("Post &Details").build();
     let details_box = TextCtrl::builder(&panel).with_value(&details).with_style(TextCtrlStyle::MultiLine | TextCtrlStyle::ReadOnly).with_size(Size::new(-1, 120)).build();
     theme::paint(&content_label);
-    theme::paint(&content);
     theme::paint(&details_label);
     theme::paint(&details_box);
     sizer.add(&content_label, 0, SizerFlag::All, 5);
