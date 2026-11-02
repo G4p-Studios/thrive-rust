@@ -1623,15 +1623,16 @@ fn post_details_for(app: &Rc<RefCell<App>>, parent: &impl WxWidget, status: Valu
     let bookmark = Button::builder(&panel).with_label(if source.get("bookmarked").and_then(Value::as_bool).unwrap_or(false) { "Unboo&kmark" } else { "Boo&kmark" }).build();
     let copy = Button::builder(&panel).with_label("&Copy Text").build();
     let open = Button::builder(&panel).with_label("Open UR&L").build();
+    let thread_button = Button::builder(&panel).with_label("View &Thread").build();
     let links_button = Button::builder(&panel).with_label("View Lin&ks").build();
     links_button.enable(!links.is_empty());
     let profile = Button::builder(&panel).with_label(&format!("View &Profile of {}", display_name(&account))).build();
     let close = Button::builder(&panel).with_label("C&lose").with_id(ID_CANCEL).build();
-    for button in [&reply, &boost, &favourite, &bookmark, &copy, &open, &links_button, &profile, &close] {
+    for button in [&reply, &boost, &favourite, &bookmark, &copy, &open, &thread_button, &links_button, &profile, &close] {
         theme::paint(button);
     }
     let buttons = BoxSizer::builder(Orientation::Horizontal).build();
-    for button in [&reply, &boost, &favourite, &bookmark, &copy, &open, &links_button] {
+    for button in [&reply, &boost, &favourite, &bookmark, &copy, &open, &thread_button, &links_button] {
         buttons.add(button, 0, SizerFlag::All, 5);
     }
     let own = id_of(&account) == id_of(&app.borrow().me);
@@ -1681,6 +1682,10 @@ fn post_details_for(app: &Rc<RefCell<App>>, parent: &impl WxWidget, status: Valu
     copy.on_click(move |_| copy_text(&plain));
     let url = source.get("url").and_then(Value::as_str).or_else(|| source.get("uri").and_then(Value::as_str)).unwrap_or("").to_string();
     open.on_click(move |_| { if !url.is_empty() { open_browser(&url); } });
+    let api_thread = app.borrow().api.clone();
+    let source_thread = source.clone();
+    let dialog_thread = dialog;
+    thread_button.on_click(move |_| show_thread(&dialog_thread, &api_thread, &source_thread));
     let dialog_links = dialog;
     let links_for_button = links.clone();
     links_button.on_click(move |_| show_links(&dialog_links, &links_for_button));
@@ -1850,6 +1855,48 @@ fn poll_results(poll: &Value) -> String {
         }
     }
     text
+}
+
+fn show_thread(parent: &impl WxWidget, api: &crate::api::Mastodon, status: &Value) {
+    let id = id_of(status);
+    let context = match api.status_context(&id) {
+        Ok(context) => context,
+        Err(error) => {
+            error_box(parent, &format!("Error loading thread: {error}"), "Thread Error");
+            return;
+        }
+    };
+    let mut posts = context.get("ancestors").and_then(Value::as_array).cloned().unwrap_or_default();
+    posts.push(status.clone());
+    if let Some(descendants) = context.get("descendants").and_then(Value::as_array) {
+        posts.extend(descendants.clone());
+    }
+    let (dialog, panel, sizer) = styled_dialog(parent, "Thread View", 600, 500);
+    let list = ListBox::builder(&panel).with_size(Size::new(-1, 350)).build();
+    for post in &posts {
+        list.append(&thread_line(post, &id));
+    }
+    if let Some(index) = posts.iter().position(|post| id_of(post) == id) {
+        list.set_selection(index as u32, true);
+    }
+    theme::paint(&list);
+    let close = Button::builder(&panel).with_label("&Close").with_id(ID_CANCEL).build();
+    theme::paint(&close);
+    sizer.add(&list, 1, SizerFlag::Expand | SizerFlag::All, 10);
+    sizer.add(&close, 0, SizerFlag::AlignRight | SizerFlag::All, 10);
+    panel.set_sizer(sizer, true);
+    dialog.show_modal();
+    dialog.destroy();
+}
+
+fn thread_line(post: &Value, current_id: &str) -> String {
+    let account = post.get("account").cloned().unwrap_or(Value::Null);
+    let raw = post.get("content").and_then(Value::as_str).unwrap_or("");
+    let spaced = raw.replace("<br />", " ").replace("<br>", " ").replace("</p>", " ");
+    let content = strip_html(&spaced).split_whitespace().collect::<Vec<_>>().join(" ");
+    let content: String = content.chars().take(200).collect();
+    let prefix = if id_of(post) == current_id { ">>> " } else { "" };
+    format!("{prefix}{}: {content}", display_name(&account))
 }
 
 fn show_links(parent: &impl WxWidget, links: &[String]) {
