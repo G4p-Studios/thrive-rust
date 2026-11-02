@@ -32,6 +32,18 @@ pub fn app_name(status: &Value) -> String {
     }
 }
 
+fn avatar_url(account: &Value, show_avatars: bool) -> Option<String> {
+    if !show_avatars {
+        return None;
+    }
+    account
+        .get("avatar_static")
+        .and_then(Value::as_str)
+        .filter(|url| !url.is_empty())
+        .or_else(|| account.get("avatar").and_then(Value::as_str).filter(|url| !url.is_empty()))
+        .map(str::to_string)
+}
+
 pub fn row_from_status(status: &Value, show_avatars: bool) -> Option<(Vec<String>, Option<String>)> {
     if status.is_null() {
         return None;
@@ -39,11 +51,7 @@ pub fn row_from_status(status: &Value, show_avatars: bool) -> Option<(Vec<String
     let is_boost = status.get("reblog").is_some_and(|value| !value.is_null());
     let source = source_status(status);
     let account = status.get("account")?;
-    let avatar = if show_avatars {
-        account.get("avatar_static").and_then(Value::as_str).map(|url| url.to_string())
-    } else {
-        None
-    };
+    let avatar = avatar_url(account, show_avatars);
     let author = display_name(account);
     let content = html_to_plain_text(source.get("content").and_then(Value::as_str).unwrap_or(""));
     let mut content_cell = if is_boost {
@@ -135,11 +143,7 @@ pub fn notification_text(notification: &Value) -> String {
 
 pub fn row_from_notification(notification: &Value, show_avatars: bool) -> (Vec<String>, Option<String>) {
     let account = notification.get("account").cloned().unwrap_or(Value::Null);
-    let avatar = if show_avatars {
-        account.get("avatar_static").and_then(Value::as_str).map(|url| url.to_string())
-    } else {
-        None
-    };
+    let avatar = avatar_url(&account, show_avatars);
     let display = notification_text(notification);
     let (author, content) = display.split_once(':').map(|(author, content)| (author.to_string(), content.trim().to_string())).unwrap_or((display, String::new()));
     let created = notification.get("created_at").and_then(Value::as_str).unwrap_or("");

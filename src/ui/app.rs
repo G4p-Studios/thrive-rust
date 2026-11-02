@@ -129,7 +129,7 @@ const POLL_SECONDS: &[i64] = &[300, 1800, 3600, 21600, 43200, 86400, 259200, 604
 enum UiMsg {
     Timeline { key: String, generation: u64, result: Result<Vec<Value>, String> },
     Stream(Value),
-    Avatar { url: String, pixels: Vec<u8> },
+    Avatar { url: String, pixels: Option<Vec<u8>> },
 }
 
 pub(crate) struct App {
@@ -981,13 +981,18 @@ fn refresh(app: &Rc<RefCell<App>>) {
 }
 
 fn toggle_avatars(app: &Rc<RefCell<App>>) {
-    let checked = app
-        .borrow()
-        .frame
-        .get_menu_bar()
-        .is_some_and(|bar| bar.is_item_checked(AVATARS));
-    app.borrow_mut().show_avatars = checked;
-    refresh(app);
+    let enabled = !app.borrow().show_avatars;
+    {
+        let mut state = app.borrow_mut();
+        state.show_avatars = enabled;
+        if enabled {
+            ensure_avatar_list(&state.posts);
+        }
+        if let Some(bar) = state.frame.get_menu_bar() {
+            bar.check_item(AVATARS, enabled);
+        }
+    }
+    show_cached(app);
 }
 
 fn show_cached(app: &Rc<RefCell<App>>) {
@@ -1017,7 +1022,7 @@ fn refill(state: &mut App) {
 }
 
 fn append_row(state: &mut App, row: &[String], avatar: Option<String>) {
-    let image = avatar.as_ref().and_then(|url| state.avatar_ids.get(url).copied());
+    let image = avatar_image(state, avatar.as_deref());
     let index = state.posts.insert_item(
         state.posts.get_item_count() as i64,
         row.first().map(String::as_str).unwrap_or(""),
@@ -1037,24 +1042,42 @@ fn append_row(state: &mut App, row: &[String], avatar: Option<String>) {
     state.row_avatars.push(avatar);
 }
 
+fn avatar_image(state: &App, url: Option<&str>) -> Option<i32> {
+    let url = url?;
+    Some(state.avatar_ids.get(url).copied().unwrap_or(0))
+}
+
+fn ensure_avatar_list(posts: &ListCtrl) {
+    if posts.get_image_list(image_list_type::SMALL).is_some() {
+        return;
+    }
+    let images = ImageList::new(48, 48, true, 8);
+    let mut pixels = vec![0u8; 48 * 48 * 4];
+    for pixel in pixels.chunks_exact_mut(4) {
+        pixel[3] = 255;
+    }
+    if let Some(bitmap) = Bitmap::from_rgba(&pixels, 48, 48) {
+        images.add_bitmap(&bitmap);
+    }
+    posts.set_image_list(images, image_list_type::SMALL);
+}
+
 fn queue_avatar(state: &mut App, url: String) {
-    if !state.pending_avatars.insert(url.clone()) {
+    if state.avatar_ids.contains_key(&url) || !state.pending_avatars.insert(url.clone()) {
         return;
     }
     let tx = state.tx.clone();
     std::thread::spawn(move || {
-        let Ok(response) = reqwest::blocking::get(&url) else {
-            return;
-        };
-        let Ok(bytes) = response.bytes() else {
-            return;
-        };
-        let Ok(image) = image::load_from_memory(&bytes) else {
-            return;
-        };
-        let image = image.resize_exact(48, 48, image::imageops::FilterType::Triangle).to_rgba8();
-        let _ = tx.send(UiMsg::Avatar { url, pixels: image.into_raw() });
+        let pixels = fetch_avatar(&url);
+        let _ = tx.send(UiMsg::Avatar { url, pixels });
     });
+}
+
+fn fetch_avatar(url: &str) -> Option<Vec<u8>> {
+    let client = reqwest::blocking::Client::builder().user_agent("Thrive").build().ok()?;
+    let bytes = client.get(url).send().ok()?.bytes().ok()?;
+    let image = image::load_from_memory(&bytes).ok()?;
+    Some(image.resize_exact(48, 48, image::imageops::FilterType::Triangle).to_rgba8().into_raw())
 }
 
 fn paint_row(posts: &ListCtrl, index: i64) {
@@ -1073,12 +1096,17 @@ fn reveal_list(posts: &ListCtrl) {
 }
 
 fn insert_row(state: &mut App, row: &[String], avatar: Option<String>) {
-    let image = avatar.as_ref().and_then(|url| state.avatar_ids.get(url).copied());
+    let image = avatar_image(state, avatar.as_deref());
     let index = state.posts.insert_item(0, row.first().map(String::as_str).unwrap_or(""), image);
     for (column, text) in row.iter().enumerate().skip(1) {
         state.posts.set_item_text_by_column(index as i64, column as i32, text);
     }
     paint_row(&state.posts, index as i64);
+    if let Some(url) = avatar.clone()
+        && !state.avatar_ids.contains_key(&url)
+    {
+        queue_avatar(state, url);
+    }
     state.row_avatars.insert(0, avatar);
     reveal_list(&state.posts);
 }
@@ -1251,19 +1279,23 @@ fn push_front(state: &mut App, key: &str, status: Value) {
     }
 }
 
-fn apply_avatar(app: &Rc<RefCell<App>>, url: String, pixels: Vec<u8>) {
+fn apply_avatar(app: &Rc<RefCell<App>>, url: String, pixels: Option<Vec<u8>>) {
     let mut state = app.borrow_mut();
+    state.pending_avatars.remove(&url);
+    let Some(pixels) = pixels else {
+        return;
+    };
     let Some(bitmap) = Bitmap::from_rgba(&pixels, 48, 48) else {
         return;
     };
-    if state.posts.get_image_list(image_list_type::SMALL).is_none() {
-        let images = ImageList::new(48, 48, false, 4);
-        state.posts.set_image_list(images, image_list_type::SMALL);
-    }
+    ensure_avatar_list(&state.posts);
     let Some(images) = state.posts.get_image_list(image_list_type::SMALL) else {
         return;
     };
     let index = images.add_bitmap(&bitmap);
+    if index < 0 {
+        return;
+    }
     state.avatar_ids.insert(url.clone(), index);
     for (row, avatar) in state.row_avatars.iter().enumerate() {
         if avatar.as_deref() == Some(url.as_str()) {
