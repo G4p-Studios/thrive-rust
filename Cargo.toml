@@ -6,7 +6,7 @@ description = "Keyboard-first Mastodon client, ported to Rust with wxDragon"
 
 [dependencies]
 arboard = "3"
-image = { version = "0.25", default-features = false, features = ["jpeg", "png", "gif"] }
+image = { version = "0.25", default-features = false, features = ["jpeg", "png", "gif", "webp"] }
 live-region = "0.3.3"
 regex = "1"
 reqwest = { version = "0.12", default-features = false, features = ["blocking", "json", "multipart", "rustls-tls"] }
