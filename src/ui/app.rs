@@ -1960,8 +1960,9 @@ fn user_timeline(app: &Rc<RefCell<App>>) {
     };
     let id = id_of(&account);
     let name = crate::rows::display_name(&account);
+    let acct = account.get("acct").and_then(Value::as_str).unwrap_or("");
     let key = format!("user:{id}");
-    ensure_timeline(app, &key, &format!("Posts by {name}"));
+    ensure_timeline(app, &key, &format!("{name} (@{acct})"));
     begin_load(app, &key);
 }
 
