@@ -663,6 +663,21 @@ fn on_key(app: &Rc<RefCell<App>>, event: &KeyboardEvent) {
         post(app);
         return;
     }
+    if !typing && ctrl && shift && !alt {
+        let letter = if (b'a' as i32..=b'z' as i32).contains(&code) { code - 32 } else { code };
+        if letter == b'F' as i32 {
+            favourite(app);
+            return;
+        }
+        if letter == b'L' as i32 {
+            relationship_toggle(app, "following", "follow", "unfollow", "Follow");
+            return;
+        }
+        if letter == b'B' as i32 {
+            relationship_confirm(app, "blocking", "block", "unblock", "Block");
+            return;
+        }
+    }
     if !typing && alt && !ctrl && !shift {
         let letter = if (b'a' as i32..=b'z' as i32).contains(&code) { code - 32 } else { code };
         if letter == b'L' as i32 {
