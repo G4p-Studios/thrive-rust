@@ -663,9 +663,20 @@ fn on_key(app: &Rc<RefCell<App>>, event: &KeyboardEvent) {
         post(app);
         return;
     }
-    if !typing && code == WXK_PAGEUP && alt && !ctrl && !shift {
-        load_older(app);
-        return;
+    if !typing && alt && !ctrl && !shift {
+        let letter = if (b'a' as i32..=b'z' as i32).contains(&code) { code - 32 } else { code };
+        if letter == b'L' as i32 {
+            select_key(app, "local");
+            return;
+        }
+        if letter == b'P' as i32 {
+            select_key(app, "federated");
+            return;
+        }
+        if code == WXK_PAGEUP {
+            load_older(app);
+            return;
+        }
     }
     event.event.skip(true);
 }
