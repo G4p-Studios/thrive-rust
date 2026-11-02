@@ -614,9 +614,15 @@ fn run(app: &Rc<RefCell<App>>, id: i32) {
         COMPOSE => app.borrow().toot.set_focus(),
         REPLY => reply(app),
         QUOTE => quote(app),
-        BOOST => boost(app),
-        FAVOURITE => favourite(app),
-        BOOKMARK => bookmark(app),
+        BOOST => {
+            boost(app);
+        }
+        FAVOURITE => {
+            favourite(app);
+        }
+        BOOKMARK => {
+            bookmark(app);
+        }
         COPY => copy_post(app),
         OPEN_URL => open_post(app),
         VIEW_POST => dialogs::post_details(app),
@@ -1524,9 +1530,9 @@ fn compose_dialog(app: &Rc<RefCell<App>>, title: &str, label: &str, initial: &st
     dialog.destroy();
 }
 
-fn boost(app: &Rc<RefCell<App>>) {
+pub(crate) fn boost(app: &Rc<RefCell<App>>) -> bool {
     let Some((mut status, index)) = selected_status(&app.borrow()) else {
-        return;
+        return false;
     };
     let id = id_of(&status);
     let api = app.borrow().api.clone();
@@ -1549,14 +1555,18 @@ fn boost(app: &Rc<RefCell<App>>) {
                 *flag = json!(!undo);
             }
             refresh_row(app, index, &status);
+            true
         }
-        Err(error) => error_box(&frame, &format!("Error: {error}"), "Boost Error"),
+        Err(error) => {
+            error_box(&frame, &format!("Error: {error}"), "Boost Error");
+            false
+        }
     }
 }
 
-fn favourite(app: &Rc<RefCell<App>>) {
-    let Some((mut status, _)) = selected_status(&app.borrow()) else {
-        return;
+pub(crate) fn favourite(app: &Rc<RefCell<App>>) -> bool {
+    let Some((mut status, index)) = selected_status(&app.borrow()) else {
+        return false;
     };
     let id = id_of(&status);
     let source = source_status(&status);
@@ -1570,7 +1580,7 @@ fn favourite(app: &Rc<RefCell<App>>) {
     };
     if let Err(error) = result {
         error_box(&frame, &format!("Error: {error}"), "Favourite Error");
-        return;
+        return false;
     }
     if undo {
         sounds::play("unfavsnd");
@@ -1589,11 +1599,13 @@ fn favourite(app: &Rc<RefCell<App>>) {
     if let Some(flag) = status.get_mut("favourited") {
         *flag = json!(!undo);
     }
+    refresh_row(app, index, &status);
+    true
 }
 
-fn bookmark(app: &Rc<RefCell<App>>) {
-    let Some((status, _)) = selected_status(&app.borrow()) else {
-        return;
+pub(crate) fn bookmark(app: &Rc<RefCell<App>>) -> bool {
+    let Some((mut status, index)) = selected_status(&app.borrow()) else {
+        return false;
     };
     let source = source_status(&status);
     let id = id_of(&source);
@@ -1605,8 +1617,20 @@ fn bookmark(app: &Rc<RefCell<App>>) {
         app.borrow().api.status_action(&id, "bookmark")
     };
     match result {
-        Ok(_) => alert(&frame, if undo { "Post unbookmarked." } else { "Post bookmarked." }, "Bookmark"),
-        Err(error) => error_box(&frame, &format!("Error: {error}"), "Bookmark Error"),
+        Ok(_) => {
+            alert(&frame, if undo { "Post unbookmarked." } else { "Post bookmarked." }, "Bookmark");
+            if let Some(reblog) = status.get_mut("reblog").filter(|value| value.is_object()) {
+                reblog["bookmarked"] = json!(!undo);
+            } else {
+                status["bookmarked"] = json!(!undo);
+            }
+            refresh_row(app, index, &status);
+            true
+        }
+        Err(error) => {
+            error_box(&frame, &format!("Error: {error}"), "Bookmark Error");
+            false
+        }
     }
 }
 

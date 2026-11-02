@@ -1644,6 +1644,27 @@ fn post_details_for(app: &Rc<RefCell<App>>, parent: &impl WxWidget, status: Valu
     buttons.add(&close, 0, SizerFlag::All, 5);
     sizer.add_sizer(&buttons, 0, SizerFlag::Expand | SizerFlag::All, 5);
     panel.set_sizer(sizer, true);
+    let app_boost = app.clone();
+    boost.on_click(move |_| {
+        if app::boost(&app_boost) {
+            let boosted = boost.get_label().contains("Un");
+            boost.set_label(if boosted { "&Boost" } else { "Un&boost" });
+        }
+    });
+    let app_favourite = app.clone();
+    favourite.on_click(move |_| {
+        if app::favourite(&app_favourite) {
+            let favourited = favourite.get_label().contains("Un");
+            favourite.set_label(if favourited { "&Favourite" } else { "Un&favourite" });
+        }
+    });
+    let app_bookmark = app.clone();
+    bookmark.on_click(move |_| {
+        if app::bookmark(&app_bookmark) {
+            let saved = bookmark.get_label().contains("Un");
+            bookmark.set_label(if saved { "Boo&kmark" } else { "Unboo&kmark" });
+        }
+    });
     let plain = status_plain_text(&source);
     copy.on_click(move |_| copy_text(&plain));
     let url = source.get("url").and_then(Value::as_str).or_else(|| source.get("uri").and_then(Value::as_str)).unwrap_or("").to_string();
