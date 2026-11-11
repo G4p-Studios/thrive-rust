@@ -1,7 +1,7 @@
 use super::{alert, confirm, copy_text, dialogs, error_box, open_browser, prompt};
 use crate::announce::Announcer;
 use crate::api::Mastodon;
-use crate::render::status_plain_text;
+use crate::render::{get_quoted_status, status_plain_text};
 use crate::rows::{row_from_notification, row_from_status, source_status};
 use crate::sounds;
 use crate::theme;
@@ -89,6 +89,9 @@ pub const DISMISS: i32 = 10046;
 pub const CLEAR_NOTIFICATIONS: i32 = 10047;
 pub const ACCEPT: i32 = 10048;
 pub const REJECT: i32 = 10049;
+pub const QUOTE_PERMISSIONS: i32 = 10050;
+pub const VIEW_QUOTES: i32 = 10051;
+pub const REVOKE_QUOTE: i32 = 10052;
 
 pub(crate) const PRIVACY_LABELS: &[&str] = &["Public", "Unlisted", "Followers-only", "Direct"];
 pub(crate) const PRIVACY_VALUES: &[&str] = &["public", "unlisted", "private", "direct"];
@@ -674,6 +677,9 @@ fn run(app: &Rc<RefCell<App>>, id: i32) {
         CLEAR_NOTIFICATIONS => clear_notifications(app),
         ACCEPT => follow_request_action(app, "authorize", "Accepted"),
         REJECT => follow_request_action(app, "reject", "Rejected"),
+        QUOTE_PERMISSIONS => quote_permissions(app),
+        VIEW_QUOTES => dialogs::quotes(app),
+        REVOKE_QUOTE => revoke_quote(app),
         _ => {}
     }
 }
@@ -2312,8 +2318,15 @@ fn show_context_menu(app: &Rc<RefCell<App>>) {
         menu.append(EDIT, "&Edit Post\tCtrl+E", "", ItemKind::Normal);
         let pin_label = if source.get("pinned").and_then(Value::as_bool).unwrap_or(false) { "Un&pin Post" } else { "&Pin Post" };
         menu.append(PIN, pin_label, "", ItemKind::Normal);
+        let quotable = matches!(source.get("visibility").and_then(Value::as_str), Some("public" | "unlisted"));
+        if app.borrow().supports_quotes && quotable {
+            menu.append(QUOTE_PERMISSIONS, "Quote &Permissions...", "", ItemKind::Normal);
+        }
     }
     menu.append_separator();
+    if app.borrow().supports_quotes && source.get("quotes_count").and_then(Value::as_i64).unwrap_or(0) > 0 {
+        menu.append(VIEW_QUOTES, "View Q&uotes", "", ItemKind::Normal);
+    }
     menu.append(PROFILE, "View &User Profile\tCtrl+Shift+U", "", ItemKind::Normal);
     menu.append(USER_COLLECTIONS, "View User Co&llections", "", ItemKind::Normal);
     menu.enable_item(USER_COLLECTIONS, app.borrow().supports_collections);
@@ -2335,8 +2348,92 @@ fn show_context_menu(app: &Rc<RefCell<App>>) {
             menu.append(ACCEPT, "&Accept Follow Request", "", ItemKind::Normal);
             menu.append(REJECT, "Re&ject Follow Request", "", ItemKind::Normal);
         }
+        if item.get("type").and_then(Value::as_str) == Some("quote") && get_quoted_status(&status).is_some() {
+            menu.append(REVOKE_QUOTE, "Re&voke Quote of My Post", "", ItemKind::Normal);
+        }
     }
     app.borrow().posts.popup_menu(&mut menu, None);
+}
+
+fn quote_permissions(app: &Rc<RefCell<App>>) {
+    let Some((mut status, index)) = selected_status(&app.borrow()) else {
+        return;
+    };
+    let source = source_status(&status);
+    if id_of(source.get("account").unwrap_or(&Value::Null)) != id_of(&app.borrow().me) {
+        return;
+    }
+    const POLICIES: [&str; 3] = ["public", "followers", "nobody"];
+    let automatic = source.pointer("/quote_approval/automatic").and_then(Value::as_array).cloned().unwrap_or_default();
+    let allows = |policy: &str| automatic.iter().any(|audience| audience.as_str() == Some(policy));
+    let current = if allows("public") { 0 } else if allows("followers") { 1 } else { 2 };
+    let frame = app.borrow().frame;
+    let choice = SingleChoiceDialog::builder(&frame, "Who may quote this post?", "Quote Permissions", &["Anybody", "Followers", "Just me"]).build();
+    choice.set_selection(current);
+    if choice.show_modal() != ID_OK {
+        return;
+    }
+    let Some(policy) = POLICIES.get(choice.get_selection() as usize) else {
+        return;
+    };
+    let path = format!("/api/v1/statuses/{}/interaction_policy", id_of(&source));
+    let result = app.borrow().api.call("PUT", &path, vec![("quote_approval_policy".to_string(), (*policy).to_string())]);
+    match result {
+        Ok(updated) => {
+            if !id_of(&updated).is_empty() {
+                if status.get("reblog").is_some_and(Value::is_object) {
+                    status["reblog"] = updated;
+                } else {
+                    status = updated;
+                }
+                refresh_row(app, index, &status);
+            }
+            alert(&frame, "Quote permissions updated.", "Quote Permissions");
+        }
+        Err(error) => error_box(&frame, &format!("Error updating quote permissions: {error}"), "Quote Permissions"),
+    }
+}
+
+fn revoke_quote(app: &Rc<RefCell<App>>) {
+    let (index, quoting, quoted) = {
+        let state = app.borrow();
+        let index = state.posts.get_first_selected_item();
+        if index < 0 || selected_key(&state).as_deref() != Some("notifications") {
+            return;
+        }
+        let Some(quoting) = state
+            .timelines
+            .get("notifications")
+            .and_then(|items| items.get(index as usize))
+            .and_then(|item| item.get("status"))
+            .filter(|value| value.is_object())
+            .cloned()
+        else {
+            return;
+        };
+        let Some(quoted) = get_quoted_status(&quoting).cloned() else {
+            return;
+        };
+        if id_of(quoted.get("account").unwrap_or(&Value::Null)) != id_of(&state.me) {
+            return;
+        }
+        (index as usize, quoting, quoted)
+    };
+    let frame = app.borrow().frame;
+    if !confirm(&frame, "Revoke this post's permission to quote you?", "Revoke Quote") {
+        return;
+    }
+    let path = format!("/api/v1/statuses/{}/quotes/{}/revoke", id_of(&quoted), id_of(&quoting));
+    let result = app.borrow().api.call("POST", &path, Vec::new());
+    match result {
+        Ok(updated) => {
+            if !id_of(&updated).is_empty() {
+                refresh_row(app, index, &updated);
+            }
+            alert(&frame, "Quote authorization revoked.", "Revoke Quote");
+        }
+        Err(error) => error_box(&frame, &format!("Error revoking quote: {error}"), "Revoke Quote"),
+    }
 }
 
 pub(crate) fn id_of(value: &Value) -> String {

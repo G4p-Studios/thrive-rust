@@ -2163,6 +2163,55 @@ pub fn who(app: &Rc<RefCell<App>>, action: &str, title: &str, empty: &str, empty
     }
 }
 
+pub fn quotes(app: &Rc<RefCell<App>>) {
+    let frame = app.borrow().frame;
+    let Some((status, _)) = app::selected_status(&app.borrow()) else { return };
+    let id = id_of(&source_status(&status));
+    let quotes = match app.borrow().api.get(&format!("/api/v1/statuses/{id}/quotes"), &[("limit", "40".to_string())]) {
+        Ok(value) => crate::api::as_array(value),
+        Err(error) => {
+            error_box(&frame, &format!("Error loading quotes: {error}"), "Quotes");
+            return;
+        }
+    };
+    if quotes.is_empty() {
+        alert(&frame, "This post has no visible quotes.", "Quotes");
+        return;
+    }
+    let (dialog, panel, sizer) = styled_dialog(&frame, "Quotes of Post", 650, 420);
+    let list = ListBox::builder(&panel).build();
+    for quote in &quotes {
+        let line = crate::rows::row_from_status(quote, false).map(|(row, _)| format!("{}: {}", row[0], row[1]));
+        list.append(&line.unwrap_or_else(|| "Unavailable quote".to_string()));
+    }
+    list.set_selection(0, true);
+    theme::paint(&list);
+    let view = Button::builder(&panel).with_label("&View").build();
+    let close = Button::builder(&panel).with_label("&Close").with_id(ID_CANCEL).build();
+    theme::paint(&view);
+    theme::paint(&close);
+    sizer.add(&list, 1, SizerFlag::Expand | SizerFlag::All, 10);
+    let buttons = BoxSizer::builder(Orientation::Horizontal).build();
+    buttons.add(&view, 0, SizerFlag::All, 5);
+    buttons.add(&close, 0, SizerFlag::All, 5);
+    sizer.add_sizer(&buttons, 0, SizerFlag::AlignRight | SizerFlag::All, 5);
+    panel.set_sizer(sizer, true);
+    let quotes = Rc::new(quotes);
+    let open_quote = {
+        let app = app.clone();
+        move || {
+            if let Some(index) = list.get_selection() {
+                post_details_for(&app, &dialog, quotes[index as usize].clone());
+            }
+        }
+    };
+    let open_double = open_quote.clone();
+    view.on_click(move |_| open_quote());
+    list.on_item_double_clicked(move |_| open_double());
+    dialog.show_modal();
+    dialog.destroy();
+}
+
 pub fn history(app: &Rc<RefCell<App>>) {
     let frame = app.borrow().frame;
     let Some((status, _)) = app::selected_status(&app.borrow()) else { return };
