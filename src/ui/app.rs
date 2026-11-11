@@ -1492,11 +1492,23 @@ fn quote(app: &Rc<RefCell<App>>) {
         return;
     };
     let source = source_status(&status);
+    if source.get("visibility").and_then(Value::as_str) == Some("direct") {
+        sounds::play("errorsnd");
+        alert(&app.borrow().frame, "Private mentions cannot be quoted.", "Quote Not Allowed");
+        return;
+    }
     if let Some(current) = source.get("quote_approval").and_then(|value| value.get("current_user")).and_then(Value::as_str)
         && (current == "denied" || current == "unknown")
     {
         sounds::play("errorsnd");
-        alert(&app.borrow().frame, "This post cannot be quoted. The author has disabled quoting.", "Quote Not Allowed");
+        let followers = ["/quote_approval/automatic", "/quote_approval/manual"].iter().any(|path| {
+            source
+                .pointer(path)
+                .and_then(Value::as_array)
+                .is_some_and(|audiences| audiences.iter().any(|audience| audience.as_str() == Some("followers")))
+        });
+        let message = if followers { "Only followers can quote this post." } else { "You are not allowed to quote this post." };
+        alert(&app.borrow().frame, message, "Quote Not Allowed");
         return;
     }
     compose_dialog(app, "Quote Post", "&Quote", "", &status, false);
@@ -1513,13 +1525,21 @@ fn compose_dialog(app: &Rc<RefCell<App>>, title: &str, label: &str, initial: &st
         .build();
     text.set_insertion_point_end();
     let privacy_label = StaticText::builder(&panel).with_label("P&rivacy:").build();
-    let visibility = status.get("visibility").and_then(Value::as_str).unwrap_or("public");
-    let selected = PRIVACY_VALUES.iter().position(|item| *item == visibility).unwrap_or(0) as u32;
+    let quoted = source_status(status);
+    let visibility = if reply { status } else { &quoted }.get("visibility").and_then(Value::as_str).unwrap_or("public");
+    // A followers-only post may only be quoted privately.
+    let (privacy_labels, privacy_values): (&[&str], &'static [&'static str]) = if !reply && visibility == "private" {
+        (&["Followers-only", "Direct"], &["private", "direct"])
+    } else {
+        (PRIVACY_LABELS, PRIVACY_VALUES)
+    };
+    let selected = privacy_values.iter().position(|item| *item == visibility).unwrap_or(0) as u32;
     let privacy = Choice::builder(&panel)
-        .with_choices(PRIVACY_LABELS.iter().map(|item| (*item).to_string()).collect())
+        .with_choices(privacy_labels.iter().map(|item| (*item).to_string()).collect())
         .with_selection(Some(selected))
         .build();
-    let send = Button::builder(&panel).with_label("&Post").build();
+    let manual = !reply && quoted.pointer("/quote_approval/current_user").and_then(Value::as_str) == Some("manual");
+    let send = Button::builder(&panel).with_label(if manual { "&Request to Quote" } else { "&Post" }).build();
     let cancel = Button::builder(&panel).with_label("&Cancel").with_id(ID_CANCEL).build();
     theme::paint(&caption);
     theme::paint(&privacy_label);
@@ -1538,7 +1558,8 @@ fn compose_dialog(app: &Rc<RefCell<App>>, title: &str, label: &str, initial: &st
     panel.set_sizer(sizer, true);
     let api = app.borrow().api.clone();
     let announcer = app.borrow().announcer;
-    let quoted = source_status(status);
+    let native_quote = app.borrow().supports_quotes || quoted.get("quote_approval").is_some_and(|value| !value.is_null());
+    let author = quoted.pointer("/account/acct").and_then(Value::as_str).unwrap_or("").to_string();
     let status_id = id_of(&quoted);
     let status_url = quoted
         .get("url")
@@ -1553,27 +1574,31 @@ fn compose_dialog(app: &Rc<RefCell<App>>, title: &str, label: &str, initial: &st
             error_box(&dialog_send, if reply { "Reply cannot be empty." } else { "Quote text cannot be empty." }, "Error");
             return;
         }
-        let visibility = PRIVACY_VALUES[privacy.get_selection().unwrap_or(0) as usize].to_string();
+        let visibility = privacy_values[privacy.get_selection().unwrap_or(0) as usize].to_string();
+        if !reply && visibility == "direct" && !author.is_empty() {
+            let mention = format!("@{author}");
+            if !body.split_whitespace().any(|word| word == mention) {
+                error_box(&dialog_send, &format!("A private quote must explicitly mention {mention}."), "Quote Not Allowed");
+                return;
+            }
+        }
         let result = if reply {
             api.status_post(vec![
                 ("status".to_string(), body),
                 ("visibility".to_string(), visibility),
                 ("in_reply_to_id".to_string(), status_id.clone()),
             ])
-        } else {
-            let quoted = api.status_post(vec![
-                ("status".to_string(), body.clone()),
-                ("visibility".to_string(), visibility.clone()),
+        } else if native_quote {
+            api.status_post(vec![
+                ("status".to_string(), body),
+                ("visibility".to_string(), visibility),
                 ("quoted_status_id".to_string(), status_id.clone()),
-            ]);
-            if quoted.is_err() {
-                api.status_post(vec![
-                    ("status".to_string(), format!("{body}\n\n{status_url}")),
-                    ("visibility".to_string(), visibility),
-                ])
-            } else {
-                quoted
-            }
+            ])
+        } else {
+            api.status_post(vec![
+                ("status".to_string(), format!("{body}\n\n{status_url}")),
+                ("visibility".to_string(), visibility),
+            ])
         };
         match result {
             Ok(_) => {
