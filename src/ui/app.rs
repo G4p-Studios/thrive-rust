@@ -726,6 +726,14 @@ fn on_key(app: &Rc<RefCell<App>>, event: &KeyboardEvent) {
             return;
         }
     }
+    if !typing && alt && shift && !ctrl && (code == b'B' as i32 || code == b'b' as i32) {
+        bookmark(app);
+        return;
+    }
+    if !typing && ctrl && !shift && !alt && code == WXK_NUMPAD_DIVIDE {
+        search(app);
+        return;
+    }
     event.event.skip(true);
 }
 
