@@ -135,10 +135,23 @@ pub fn notification_text(notification: &Value) -> String {
         "poll" => format!("A poll notification from {user} is no longer available."),
         "update" if status.is_some() => format!("{user}'s post you interacted with was edited: {content}"),
         "update" => format!("{user}'s edited post is no longer available."),
-        "added_to_collection" => format!("{user} added you to a collection."),
-        "collection_update" => format!("{user} updated a collection you are featured in."),
+        "quote" if status.is_some() => format!("{user} quoted your post: {content}"),
+        "quote" => format!("{user} quoted a post that is no longer available."),
+        "quoted_update" if status.is_some() => format!("{user} edited a post quoted by your post: {content}"),
+        "quoted_update" => format!("{user} edited a post you quoted."),
+        "added_to_collection" => format!("{user} added you to {}.", collection_name(notification)),
+        "collection_update" => format!("{user} updated {}, which features you.", collection_name(notification)),
         _ => format!("{user}: {kind}"),
     }
+}
+
+fn collection_name(notification: &Value) -> String {
+    notification
+        .pointer("/collection/name")
+        .and_then(Value::as_str)
+        .filter(|name| !name.is_empty())
+        .unwrap_or("an unnamed collection")
+        .to_string()
 }
 
 pub fn row_from_notification(notification: &Value, show_avatars: bool) -> (Vec<String>, Option<String>) {
@@ -149,4 +162,28 @@ pub fn row_from_notification(notification: &Value, show_avatars: bool) -> (Vec<S
     let created = notification.get("created_at").and_then(Value::as_str).unwrap_or("");
     let status = notification.get("status").cloned().unwrap_or(Value::Null);
     (vec![author, content, relative_time(created), app_name(&status)], avatar)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn quote_notifications_name_the_quoter() {
+        let account = json!({"display_name": "Sam", "acct": "sam"});
+        let quoted = json!({"type": "quote", "account": account, "status": {"content": "<p>Nice</p>"}});
+        assert_eq!(notification_text(&quoted), "Sam quoted your post: Nice");
+        let gone = json!({"type": "quoted_update", "account": account});
+        assert_eq!(notification_text(&gone), "Sam edited a post you quoted.");
+    }
+
+    #[test]
+    fn collection_notifications_name_the_collection() {
+        let account = json!({"display_name": "Sam"});
+        let named = json!({"type": "added_to_collection", "account": account, "collection": {"name": "Friends"}});
+        assert_eq!(notification_text(&named), "Sam added you to Friends.");
+        let unnamed = json!({"type": "collection_update", "account": account, "collection": {}});
+        assert_eq!(notification_text(&unnamed), "Sam updated an unnamed collection, which features you.");
+    }
 }

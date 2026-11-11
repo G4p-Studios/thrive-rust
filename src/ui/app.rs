@@ -1242,7 +1242,7 @@ fn add_status(state: &mut App, status: Value) {
 
 fn add_notification(state: &mut App, notification: Value) {
     match notification.get("type").and_then(Value::as_str).unwrap_or("") {
-        "favourite" | "reblog" | "follow" | "follow_request" | "status" | "added_to_collection" | "collection_update" => {
+        "favourite" | "reblog" | "follow" | "follow_request" | "status" | "quote" | "quoted_update" | "added_to_collection" | "collection_update" => {
             sounds::play("notificationsnd");
         }
         "mention" => {

@@ -10,6 +10,8 @@ pub const SUPPORTED_NOTIFICATION_TYPES: &[&str] = &[
     "favourite",
     "poll",
     "update",
+    "quote",
+    "quoted_update",
     "added_to_collection",
     "collection_update",
 ];
