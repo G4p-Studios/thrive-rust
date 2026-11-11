@@ -125,6 +125,8 @@ const POLL_LABELS: &[&str] = &[
     "7 days",
 ];
 const POLL_SECONDS: &[i64] = &[300, 1800, 3600, 21600, 43200, 86400, 259200, 604800];
+const QUOTE_POLICY_LABELS: &[&str] = &["Default", "Anybody", "Followers", "Just me"];
+const QUOTE_POLICY_VALUES: &[Option<&str>] = &[None, Some("public"), Some("followers"), Some("nobody")];
 
 enum UiMsg {
     Timeline { key: String, generation: u64, result: Result<Vec<Value>, String> },
@@ -151,6 +153,9 @@ pub(crate) struct App {
     pub schedule_toggle: CheckBox,
     pub privacy: Choice,
     pub language: Choice,
+    pub quote_policy: Choice,
+    pub supports_quotes: bool,
+    pub supports_collections: bool,
     pub post_button: Button,
     pub poll_inputs: Vec<TextCtrl>,
     pub poll_labels: Vec<StaticText>,
@@ -181,6 +186,9 @@ pub(crate) struct App {
 }
 
 pub fn open(api: Mastodon, me: Value) {
+    let version = crate::api::api_version(&api.instance_v2().unwrap_or(Value::Null));
+    let supports_quotes = version.is_some_and(|version| version >= crate::api::QUOTE_POSTS_API_VERSION);
+    let supports_collections = version.is_some_and(|version| version >= crate::api::COLLECTIONS_API_VERSION);
     let frame = Frame::builder()
         .with_title("Thrive Mastodon Client")
         .with_size(Size::new(1100, 700))
@@ -234,6 +242,11 @@ pub fn open(api: Mastodon, me: Value) {
     let language_label = StaticText::builder(&panel).with_label("&Lang:").build();
     let language = Choice::builder(&panel)
         .with_choices(LANGUAGES.iter().map(|(name, _)| (*name).to_string()).collect())
+        .with_selection(Some(0))
+        .build();
+    let quote_policy_label = StaticText::builder(&panel).with_label("&Quotes:").build();
+    let quote_policy = Choice::builder(&panel)
+        .with_choices(QUOTE_POLICY_LABELS.iter().map(|item| (*item).to_string()).collect())
         .with_selection(Some(0))
         .build();
     let post_button = Button::builder(&panel).with_label("&Post").build();
@@ -318,6 +331,7 @@ pub fn open(api: Mastodon, me: Value) {
         &cw_label,
         &privacy_label,
         &language_label,
+        &quote_policy_label,
         &posts_label,
         &duration_label,
         &alt_label,
@@ -332,6 +346,7 @@ pub fn open(api: Mastodon, me: Value) {
     theme::paint(&schedule_toggle);
     theme::paint(&privacy);
     theme::paint(&language);
+    theme::paint(&quote_policy);
     theme::paint(&post_button);
     theme::paint(&exit_button);
     theme::paint(&poll_duration);
@@ -343,7 +358,7 @@ pub fn open(api: Mastodon, me: Value) {
     theme::paint(&schedule_date);
     theme::paint(&schedule_time);
 
-    install_menus(&frame);
+    install_menus(&frame, supports_collections);
     let vbox = BoxSizer::builder(Orientation::Vertical).build();
     vbox.add(&toot_label, 0, SizerFlag::Left | SizerFlag::Right | SizerFlag::Top, 5);
     vbox.add(&toot, 0, SizerFlag::All | SizerFlag::Expand, 5);
@@ -358,6 +373,13 @@ pub fn open(api: Mastodon, me: Value) {
     controls.add(&privacy, 0, SizerFlag::AlignCenterVertical | SizerFlag::Right, 8);
     controls.add(&language_label, 0, SizerFlag::AlignCenterVertical | SizerFlag::Right, 3);
     controls.add(&language, 0, SizerFlag::AlignCenterVertical | SizerFlag::Right, 8);
+    if supports_quotes {
+        controls.add(&quote_policy_label, 0, SizerFlag::AlignCenterVertical | SizerFlag::Right, 3);
+        controls.add(&quote_policy, 0, SizerFlag::AlignCenterVertical | SizerFlag::Right, 8);
+    } else {
+        quote_policy_label.show(false);
+        quote_policy.show(false);
+    }
     controls.add_stretch_spacer(1);
     controls.add(&post_button, 0, SizerFlag::AlignCenterVertical | SizerFlag::Right, 5);
     controls.add(&exit_button, 0, SizerFlag::AlignCenterVertical, 0);
@@ -399,6 +421,9 @@ pub fn open(api: Mastodon, me: Value) {
         schedule_toggle,
         privacy,
         language,
+        quote_policy,
+        supports_quotes,
+        supports_collections,
         post_button,
         poll_inputs,
         poll_labels,
@@ -450,7 +475,7 @@ pub fn open(api: Mastodon, me: Value) {
     app.borrow().toot.set_focus();
 }
 
-fn install_menus(frame: &Frame) {
+fn install_menus(frame: &Frame, supports_collections: bool) {
     let client = Menu::builder().with_title("Client").build();
     client.append(SETTINGS, "&Settings...\tAlt-S", "Open Settings", ItemKind::Normal);
     client.append(FILTERS, "Notification &Filters...", "Choose which notifications are accepted, filtered, or dropped", ItemKind::Normal);
@@ -466,6 +491,7 @@ fn install_menus(frame: &Frame) {
     view.append(EXPLORE, "E&xplore/Discover...\tCtrl+T", "Browse trending posts, hashtags, and links", ItemKind::Normal);
     view.append(LISTS, "&Lists...", "Manage and view lists", ItemKind::Normal);
     view.append(COLLECTIONS, "&Collections...", "Manage and view account collections", ItemKind::Normal);
+    view.enable_item(COLLECTIONS, supports_collections);
     view.append(HASHTAGS, "Followed &Hashtags...", "View and manage followed hashtags", ItemKind::Normal);
     view.append_separator();
     view.append(FAVOURITES_TL, "Fav&ourites\tCtrl+Alt+K", "View your favourited posts", ItemKind::Normal);
@@ -510,6 +536,7 @@ fn install_menus(frame: &Frame) {
     actions.append_separator();
     actions.append(PROFILE, "View &User Profile\tCtrl+Shift+U", "", ItemKind::Normal);
     actions.append(USER_COLLECTIONS, "View User Co&llections", "", ItemKind::Normal);
+    actions.enable_item(USER_COLLECTIONS, supports_collections);
     actions.append(SEARCH, "&Search\tCtrl+/", "", ItemKind::Normal);
     actions.append(USER_TIMELINE, "Open User Time&line\tCtrl+U", "", ItemKind::Normal);
     actions.append(DM, "Send &Direct Message\tCtrl+D", "", ItemKind::Normal);
@@ -749,7 +776,7 @@ fn toggle_schedule(app: &Rc<RefCell<App>>) {
 }
 
 fn post(app: &Rc<RefCell<App>>) {
-    let (text, spoiler, visibility, language, poll, files, scheduled) = {
+    let (text, spoiler, visibility, language, quote_policy, poll, files, scheduled) = {
         let state = app.borrow();
         let text = state.toot.get_value().trim().to_string();
         let spoiler = if state.cw_toggle.is_checked() {
@@ -762,6 +789,11 @@ fn post(app: &Rc<RefCell<App>>) {
         let visibility = PRIVACY_VALUES[state.privacy.get_selection().unwrap_or(0) as usize].to_string();
         let language_index = state.language.get_selection().unwrap_or(0) as usize;
         let language = LANGUAGES.get(language_index).map(|(_, code)| (*code).to_string()).filter(|code| !code.is_empty());
+        let quote_policy = if state.supports_quotes {
+            QUOTE_POLICY_VALUES.get(state.quote_policy.get_selection().unwrap_or(0) as usize).copied().flatten()
+        } else {
+            None
+        };
         let poll = if state.poll_toggle.is_checked() {
             let options = state
                 .poll_inputs
@@ -788,7 +820,7 @@ fn post(app: &Rc<RefCell<App>>) {
         } else {
             None
         };
-        (text, spoiler, visibility, language, poll, files, scheduled)
+        (text, spoiler, visibility, language, quote_policy, poll, files, scheduled)
     };
     if text.is_empty() && poll.is_none() && files.is_empty() {
         sounds::play("errorsnd");
@@ -833,6 +865,9 @@ fn post(app: &Rc<RefCell<App>>) {
     }
     if let Some(language) = language {
         fields.push(("language".to_string(), language));
+    }
+    if let Some(policy) = quote_policy {
+        fields.push(("quote_approval_policy".to_string(), policy.to_string()));
     }
     if let Some(scheduled_at) = scheduled_at.clone() {
         fields.push(("scheduled_at".to_string(), scheduled_at));
@@ -2256,6 +2291,7 @@ fn show_context_menu(app: &Rc<RefCell<App>>) {
     menu.append_separator();
     menu.append(PROFILE, "View &User Profile\tCtrl+Shift+U", "", ItemKind::Normal);
     menu.append(USER_COLLECTIONS, "View User Co&llections", "", ItemKind::Normal);
+    menu.enable_item(USER_COLLECTIONS, app.borrow().supports_collections);
     menu.append(USER_TIMELINE, "Open User Time&line\tCtrl+U", "", ItemKind::Normal);
     menu.append_separator();
     menu.append(MEDIA, "View M&edia Attachments", "", ItemKind::Normal);

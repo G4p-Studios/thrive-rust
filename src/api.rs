@@ -16,6 +16,9 @@ pub const SUPPORTED_NOTIFICATION_TYPES: &[&str] = &[
     "collection_update",
 ];
 
+pub const QUOTE_POSTS_API_VERSION: i64 = 7;
+pub const COLLECTIONS_API_VERSION: i64 = 10;
+
 #[derive(Clone)]
 pub struct Mastodon {
     inner: Arc<Inner>,
@@ -370,6 +373,12 @@ pub fn normalize_instance(instance: &str) -> Result<String, String> {
     Ok(with_scheme)
 }
 
+/// The machine-readable Mastodon API version from /api/v2/instance, if advertised.
+pub fn api_version(instance: &Value) -> Option<i64> {
+    let value = instance.pointer("/api_versions/mastodon")?;
+    value.as_i64().or_else(|| value.as_str().and_then(|text| text.trim().parse().ok()))
+}
+
 pub fn collections_from_response(response: &Value) -> Vec<Value> {
     if let Some(list) = response.get("collections").and_then(Value::as_array) {
         return list.clone();
@@ -507,6 +516,14 @@ mod tests {
         assert_eq!(collections_from_response(&json!({"collections": [1, 2]})).len(), 2);
         assert_eq!(collections_from_response(&json!({"collections:": [3]})).len(), 1);
         assert_eq!(collections_from_response(&json!([4])).len(), 1);
+    }
+
+    #[test]
+    fn api_version_reads_numbers_and_strings() {
+        assert_eq!(api_version(&json!({"api_versions": {"mastodon": 7}})), Some(7));
+        assert_eq!(api_version(&json!({"api_versions": {"mastodon": "10"}})), Some(10));
+        assert_eq!(api_version(&json!({"api_versions": {}})), None);
+        assert_eq!(api_version(&json!({})), None);
     }
 
     #[test]
