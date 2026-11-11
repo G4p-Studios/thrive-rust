@@ -2149,6 +2149,18 @@ fn refresh_row(app: &Rc<RefCell<App>>, index: usize, status: &Value) {
     let Some(key) = selected_key(&state) else {
         return;
     };
+    if key == "notifications" {
+        let show_avatars = state.show_avatars;
+        let Some(notification) = state.timelines.get_mut(&key).and_then(|items| items.get_mut(index)) else {
+            return;
+        };
+        notification["status"] = status.clone();
+        let (row, _) = row_from_notification(notification, show_avatars);
+        for (column, text) in row.iter().enumerate() {
+            state.posts.set_item_text_by_column(index as i64, column as i32, text);
+        }
+        return;
+    }
     if let Some(slot) = state.timelines.get_mut(&key).and_then(|items| items.get_mut(index)) {
         *slot = status.clone();
     }
