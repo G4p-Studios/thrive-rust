@@ -905,7 +905,6 @@ fn post(app: &Rc<RefCell<App>>) {
         alert(&frame, &format!("Post scheduled for {when} UTC."), "Scheduled");
     } else {
         sounds::play("tootsnd");
-        app.borrow().announcer.say("Post sent");
     }
     let state = app.borrow();
     state.toot.set_value("");
@@ -1571,7 +1570,6 @@ fn compose_dialog(app: &Rc<RefCell<App>>, title: &str, label: &str, initial: &st
     sizer.add_sizer(&buttons, 0, SizerFlag::AlignRight | SizerFlag::Right | SizerFlag::Bottom, 10);
     panel.set_sizer(sizer, true);
     let api = app.borrow().api.clone();
-    let announcer = app.borrow().announcer;
     let native_quote = app.borrow().supports_quotes || quoted.get("quote_approval").is_some_and(|value| !value.is_null());
     let author = quoted.pointer("/account/acct").and_then(Value::as_str).unwrap_or("").to_string();
     let status_id = id_of(&quoted);
@@ -1616,13 +1614,7 @@ fn compose_dialog(app: &Rc<RefCell<App>>, title: &str, label: &str, initial: &st
         };
         match result {
             Ok(_) => {
-                if reply {
-                    sounds::play("replysnd");
-                    announcer.say("Reply sent");
-                } else {
-                    sounds::play("tootsnd");
-                    announcer.say("Quote posted");
-                }
+                sounds::play(if reply { "replysnd" } else { "tootsnd" });
                 dialog_send.end_modal(ID_OK);
             }
             Err(error) => error_box(&dialog_send, &format!("Error sending: {error}"), "Error"),
@@ -1649,9 +1641,6 @@ pub(crate) fn boost(app: &Rc<RefCell<App>>) -> bool {
         Ok(_) => {
             if !undo {
                 sounds::play("boostsnd");
-                app.borrow().announcer.say("Boosted");
-            } else {
-                app.borrow().announcer.say("Unboosted");
             }
             if let Some(flag) = status.get_mut("reblogged") {
                 *flag = json!(!undo);
@@ -1686,11 +1675,9 @@ pub(crate) fn favourite(app: &Rc<RefCell<App>>) -> bool {
     }
     if undo {
         sounds::play("unfavsnd");
-        app.borrow().announcer.say("Unfavourited");
         remove_from_timeline(app, "favourites", &id_of(&source));
     } else {
         sounds::play("favsnd");
-        app.borrow().announcer.say("Favourited");
         let mut state = app.borrow_mut();
         let selected = selected_key(&state).as_deref() == Some("favourites");
         state.timelines.entry("favourites".to_string()).or_default().insert(0, source.clone());
